@@ -11,9 +11,9 @@ on:
         options:
           - daily
           - backfill
-  schedule:
-    # 09:00 UTC = 17:00 Hong Kong time = after all NBA games have ended
-    - cron: '0 9 * * *'
+#  schedule:
+#    # 09:00 UTC = 17:00 Hong Kong time = after all NBA games have ended
+#    - cron: '0 9 * * *'
 
 jobs:
   update:
