@@ -6,22 +6,24 @@ Phase 1 covers:
   - team box    (traditional + advanced)
   - player box  (traditional + advanced)
   - players     (derived from box score appearances)
+
+NOTE: Uses V3 endpoints because NBA deprecated V2 in 2024.
 """
 from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from nba_api.stats.endpoints import (
-    boxscoreadvancedv2,
-    boxscoretraditionalv2,
+    boxscoreadvancedv3,
+    boxscoretraditionalv3,
     leaguegamefinder,
 )
 from nba_api.stats.static import teams as static_teams
 
-from .db import connect, record_etl, upsert
+from .db import record_etl, upsert
 from .nba import SEASON_TYPES, call_with_retry, current_season
 
 logger = logging.getLogger(__name__)
@@ -40,7 +42,6 @@ def seed_teams(conn: sqlite3.Connection) -> int:
             "full_name": t["full_name"],
             "nickname": t["nickname"],
             "city": t["city"],
-            # conference/division aren't in the static list — fill in later via roster endpoint if needed
             "conference": None,
             "division": None,
         })
@@ -74,24 +75,17 @@ def _season_type_to_label(season_type_api: str) -> str:
 
 
 def fetch_schedule_for_season(season: str, season_type: str) -> list[dict]:
-    """Use LeagueGameFinder to grab all games for a season+type.
-
-    Returns the raw `LeagueGameFinderResults` rows as dicts. Each completed
-    game shows up as TWO rows (one per team), which we collapse into one
-    `games` row downstream.
-    """
     finder = call_with_retry(
         leaguegamefinder.LeagueGameFinder,
         season_nullable=season,
         season_type_nullable=season_type,
-        league_id_nullable="00",  # NBA
+        league_id_nullable="00",
     )
     df = finder.get_data_frames()[0]
     return df.to_dict("records")
 
 
 def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
-    """Pull current-season schedule across all season types and upsert games table."""
     season = season or current_season()
     by_game: dict[str, dict[str, Any]] = {}
 
@@ -107,13 +101,13 @@ def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
             team_id = int(r["TEAM_ID"])
             opp_id = _abbr_to_team_id(conn, opp_abbr)
             if opp_id is None:
-                continue  # rare: G-League or All-Star noise
+                continue
 
             entry = by_game.setdefault(gid, {
                 "game_id": gid,
                 "season": season,
                 "season_type": _season_type_to_label(st),
-                "game_date": r["GAME_DATE"],   # already YYYY-MM-DD
+                "game_date": r["GAME_DATE"],
                 "game_datetime_et": None,
                 "home_team_id": None,
                 "away_team_id": None,
@@ -146,16 +140,37 @@ def _is_nan(x: Any) -> bool:
 
 
 # =========================================================================
-# BOX SCORES — traditional + advanced, team + player
+# BOX SCORES — V3 endpoints (V2 was deprecated by NBA in 2024)
 # =========================================================================
 
 def _min_to_float(min_str: Any) -> float | None:
-    """nba_api V2 returns minutes as 'MM:SS' string OR plain int OR None."""
+    """V3 minutes format is 'PT34M12.34S' (ISO-8601 duration) OR 'MM:SS' OR int."""
     if min_str is None or min_str == "":
         return None
     if isinstance(min_str, (int, float)):
         return float(min_str)
-    s = str(min_str)
+    s = str(min_str).strip()
+
+    # ISO-8601 duration: 'PT34M12.34S' or 'PT34M' or 'PT0S'
+    if s.startswith("PT"):
+        body = s[2:]
+        minutes = 0.0
+        seconds = 0.0
+        if "M" in body:
+            m_part, _, rest = body.partition("M")
+            try:
+                minutes = float(m_part)
+            except ValueError:
+                return None
+            body = rest
+        if body.endswith("S"):
+            try:
+                seconds = float(body[:-1])
+            except ValueError:
+                return None
+        return minutes + seconds / 60.0
+
+    # Old MM:SS format
     if ":" in s:
         try:
             m, sec = s.split(":")
@@ -186,71 +201,87 @@ def _safe_float(x: Any) -> float | None:
         return None
 
 
-# ---- Traditional box score ----------------------------------------------
+# ---- Traditional box score (V3) ----------------------------------------
 
 def fetch_traditional_box(game_id: str) -> tuple[list[dict], list[dict], list[dict]]:
-    """Returns (team_rows, player_rows, player_seen) tuples for the games's traditional box."""
-    bs = call_with_retry(boxscoretraditionalv2.BoxScoreTraditionalV2, game_id=game_id)
-    team_df, player_df = bs.team_stats.get_data_frame(), bs.player_stats.get_data_frame()
+    """Returns (team_rows, player_rows, player_seen) for the game's traditional box.
 
-    # Determine home team for is_home flag — fall back to first row if needed
-    # (the LineScore endpoint is more authoritative but we can fetch home_team_id from games table later)
+    V3 field names use camelCase (fieldGoalsMade, etc.) instead of V2's UPPER_CASE.
+    """
+    bs = call_with_retry(boxscoretraditionalv3.BoxScoreTraditionalV3, game_id=game_id)
+    team_df = bs.team_stats.get_data_frame()
+    player_df = bs.player_stats.get_data_frame()
+
     team_rows: list[dict] = []
     for _, r in team_df.iterrows():
         team_rows.append({
-            "game_id": str(r["GAME_ID"]),
-            "team_id": int(r["TEAM_ID"]),
-            "is_home": 0,  # corrected by post-process below
-            "minutes": _min_to_float(r.get("MIN")),
-            "fgm": _safe_int(r.get("FGM")), "fga": _safe_int(r.get("FGA")),
-            "fg_pct": _safe_float(r.get("FG_PCT")),
-            "fg3m": _safe_int(r.get("FG3M")), "fg3a": _safe_int(r.get("FG3A")),
-            "fg3_pct": _safe_float(r.get("FG3_PCT")),
-            "ftm": _safe_int(r.get("FTM")), "fta": _safe_int(r.get("FTA")),
-            "ft_pct": _safe_float(r.get("FT_PCT")),
-            "oreb": _safe_int(r.get("OREB")), "dreb": _safe_int(r.get("DREB")),
-            "reb": _safe_int(r.get("REB")),
-            "ast": _safe_int(r.get("AST")), "stl": _safe_int(r.get("STL")),
-            "blk": _safe_int(r.get("BLK")),
-            "tov": _safe_int(r.get("TO")), "pf": _safe_int(r.get("PF")),
-            "pts": _safe_int(r.get("PTS")),
-            "plus_minus": _safe_int(r.get("PLUS_MINUS")),
+            "game_id": str(r["gameId"]).zfill(10),
+            "team_id": int(r["teamId"]),
+            "is_home": 0,  # corrected post-fetch using games.home_team_id
+            "minutes": _min_to_float(r.get("minutes")),
+            "fgm": _safe_int(r.get("fieldGoalsMade")),
+            "fga": _safe_int(r.get("fieldGoalsAttempted")),
+            "fg_pct": _safe_float(r.get("fieldGoalsPercentage")),
+            "fg3m": _safe_int(r.get("threePointersMade")),
+            "fg3a": _safe_int(r.get("threePointersAttempted")),
+            "fg3_pct": _safe_float(r.get("threePointersPercentage")),
+            "ftm": _safe_int(r.get("freeThrowsMade")),
+            "fta": _safe_int(r.get("freeThrowsAttempted")),
+            "ft_pct": _safe_float(r.get("freeThrowsPercentage")),
+            "oreb": _safe_int(r.get("reboundsOffensive")),
+            "dreb": _safe_int(r.get("reboundsDefensive")),
+            "reb": _safe_int(r.get("reboundsTotal")),
+            "ast": _safe_int(r.get("assists")),
+            "stl": _safe_int(r.get("steals")),
+            "blk": _safe_int(r.get("blocks")),
+            "tov": _safe_int(r.get("turnovers")),
+            "pf": _safe_int(r.get("foulsPersonal")),
+            "pts": _safe_int(r.get("points")),
+            "plus_minus": _safe_int(r.get("plusMinusPoints")),
         })
 
     player_rows: list[dict] = []
     seen_players: list[dict] = []
     today_iso = date.today().isoformat()
     for _, r in player_df.iterrows():
-        pid = int(r["PLAYER_ID"])
+        pid = int(r["personId"])
+        full_name = " ".join(part for part in [r.get("firstName"), r.get("familyName")] if part)
         seen_players.append({
             "player_id": pid,
-            "full_name": r.get("PLAYER_NAME"),
-            "first_name": None,
-            "last_name": None,
+            "full_name": full_name or r.get("nameI"),
+            "first_name": r.get("firstName"),
+            "last_name": r.get("familyName"),
             "is_active": 1,
             "last_seen_date": today_iso,
         })
-        start_pos = r.get("START_POSITION")
-        is_starter = 1 if (start_pos is not None and str(start_pos).strip() != "") else 0
+        # In V3, starters have a position field set ("F", "G", "C"); bench players have "" or NaN
+        position = r.get("position")
+        is_starter = 1 if (position is not None and str(position).strip() not in ("", "nan", "None")) else 0
         player_rows.append({
-            "game_id": str(r["GAME_ID"]),
+            "game_id": str(r["gameId"]).zfill(10),
             "player_id": pid,
-            "team_id": int(r["TEAM_ID"]),
+            "team_id": int(r["teamId"]),
             "is_starter": is_starter,
-            "minutes": _min_to_float(r.get("MIN")),
-            "fgm": _safe_int(r.get("FGM")), "fga": _safe_int(r.get("FGA")),
-            "fg_pct": _safe_float(r.get("FG_PCT")),
-            "fg3m": _safe_int(r.get("FG3M")), "fg3a": _safe_int(r.get("FG3A")),
-            "fg3_pct": _safe_float(r.get("FG3_PCT")),
-            "ftm": _safe_int(r.get("FTM")), "fta": _safe_int(r.get("FTA")),
-            "ft_pct": _safe_float(r.get("FT_PCT")),
-            "oreb": _safe_int(r.get("OREB")), "dreb": _safe_int(r.get("DREB")),
-            "reb": _safe_int(r.get("REB")),
-            "ast": _safe_int(r.get("AST")), "stl": _safe_int(r.get("STL")),
-            "blk": _safe_int(r.get("BLK")),
-            "tov": _safe_int(r.get("TO")), "pf": _safe_int(r.get("PF")),
-            "pts": _safe_int(r.get("PTS")),
-            "plus_minus": _safe_int(r.get("PLUS_MINUS")),
+            "minutes": _min_to_float(r.get("minutes")),
+            "fgm": _safe_int(r.get("fieldGoalsMade")),
+            "fga": _safe_int(r.get("fieldGoalsAttempted")),
+            "fg_pct": _safe_float(r.get("fieldGoalsPercentage")),
+            "fg3m": _safe_int(r.get("threePointersMade")),
+            "fg3a": _safe_int(r.get("threePointersAttempted")),
+            "fg3_pct": _safe_float(r.get("threePointersPercentage")),
+            "ftm": _safe_int(r.get("freeThrowsMade")),
+            "fta": _safe_int(r.get("freeThrowsAttempted")),
+            "ft_pct": _safe_float(r.get("freeThrowsPercentage")),
+            "oreb": _safe_int(r.get("reboundsOffensive")),
+            "dreb": _safe_int(r.get("reboundsDefensive")),
+            "reb": _safe_int(r.get("reboundsTotal")),
+            "ast": _safe_int(r.get("assists")),
+            "stl": _safe_int(r.get("steals")),
+            "blk": _safe_int(r.get("blocks")),
+            "tov": _safe_int(r.get("turnovers")),
+            "pf": _safe_int(r.get("foulsPersonal")),
+            "pts": _safe_int(r.get("points")),
+            "plus_minus": _safe_int(r.get("plusMinusPoints")),
         })
 
     return team_rows, player_rows, seen_players
@@ -259,7 +290,6 @@ def fetch_traditional_box(game_id: str) -> tuple[list[dict], list[dict], list[di
 def ingest_traditional_box(conn: sqlite3.Connection, game_id: str) -> bool:
     try:
         team_rows, player_rows, seen = fetch_traditional_box(game_id)
-        # Look up home team from games and set is_home flag
         g = conn.execute("SELECT home_team_id FROM games WHERE game_id = ?", (game_id,)).fetchone()
         if g and g["home_team_id"]:
             for tr in team_rows:
@@ -277,57 +307,57 @@ def ingest_traditional_box(conn: sqlite3.Connection, game_id: str) -> bool:
         return False
 
 
-# ---- Advanced box score -------------------------------------------------
+# ---- Advanced box score (V3) -------------------------------------------
 
 def fetch_advanced_box(game_id: str) -> tuple[list[dict], list[dict]]:
-    bs = call_with_retry(boxscoreadvancedv2.BoxScoreAdvancedV2, game_id=game_id)
+    bs = call_with_retry(boxscoreadvancedv3.BoxScoreAdvancedV3, game_id=game_id)
     team_df = bs.team_stats.get_data_frame()
     player_df = bs.player_stats.get_data_frame()
 
     def _team_row(r: dict) -> dict:
         return {
-            "game_id": str(r["GAME_ID"]),
-            "team_id": int(r["TEAM_ID"]),
-            "minutes": _min_to_float(r.get("MIN")),
-            "off_rating": _safe_float(r.get("OFF_RATING")),
-            "def_rating": _safe_float(r.get("DEF_RATING")),
-            "net_rating": _safe_float(r.get("NET_RATING")),
-            "pace": _safe_float(r.get("PACE")),
+            "game_id": str(r["gameId"]).zfill(10),
+            "team_id": int(r["teamId"]),
+            "minutes": _min_to_float(r.get("minutes")),
+            "off_rating": _safe_float(r.get("offensiveRating")),
+            "def_rating": _safe_float(r.get("defensiveRating")),
+            "net_rating": _safe_float(r.get("netRating")),
+            "pace": _safe_float(r.get("pace")),
             "pie": _safe_float(r.get("PIE")),
-            "ast_pct": _safe_float(r.get("AST_PCT")),
-            "ast_to_tov": _safe_float(r.get("AST_TOV")),
-            "ast_ratio": _safe_float(r.get("AST_RATIO")),
-            "oreb_pct": _safe_float(r.get("OREB_PCT")),
-            "dreb_pct": _safe_float(r.get("DREB_PCT")),
-            "reb_pct": _safe_float(r.get("REB_PCT")),
-            "tov_pct": _safe_float(r.get("TM_TOV_PCT") or r.get("TOV_PCT")),
-            "efg_pct": _safe_float(r.get("EFG_PCT")),
-            "ts_pct": _safe_float(r.get("TS_PCT")),
-            "poss": _safe_float(r.get("POSS")),
+            "ast_pct": _safe_float(r.get("assistPercentage")),
+            "ast_to_tov": _safe_float(r.get("assistToTurnover")),
+            "ast_ratio": _safe_float(r.get("assistRatio")),
+            "oreb_pct": _safe_float(r.get("offensiveReboundPercentage")),
+            "dreb_pct": _safe_float(r.get("defensiveReboundPercentage")),
+            "reb_pct": _safe_float(r.get("reboundPercentage")),
+            "tov_pct": _safe_float(r.get("turnoverRatio")),
+            "efg_pct": _safe_float(r.get("effectiveFieldGoalPercentage")),
+            "ts_pct": _safe_float(r.get("trueShootingPercentage")),
+            "poss": _safe_float(r.get("possessions")),
         }
 
     def _player_row(r: dict) -> dict:
         return {
-            "game_id": str(r["GAME_ID"]),
-            "player_id": int(r["PLAYER_ID"]),
-            "team_id": int(r["TEAM_ID"]),
-            "minutes": _min_to_float(r.get("MIN")),
-            "off_rating": _safe_float(r.get("OFF_RATING")),
-            "def_rating": _safe_float(r.get("DEF_RATING")),
-            "net_rating": _safe_float(r.get("NET_RATING")),
-            "usg_pct": _safe_float(r.get("USG_PCT")),
+            "game_id": str(r["gameId"]).zfill(10),
+            "player_id": int(r["personId"]),
+            "team_id": int(r["teamId"]),
+            "minutes": _min_to_float(r.get("minutes")),
+            "off_rating": _safe_float(r.get("offensiveRating")),
+            "def_rating": _safe_float(r.get("defensiveRating")),
+            "net_rating": _safe_float(r.get("netRating")),
+            "usg_pct": _safe_float(r.get("usagePercentage")),
             "pie": _safe_float(r.get("PIE")),
-            "ast_pct": _safe_float(r.get("AST_PCT")),
-            "ast_to_tov": _safe_float(r.get("AST_TOV")),
-            "ast_ratio": _safe_float(r.get("AST_RATIO")),
-            "oreb_pct": _safe_float(r.get("OREB_PCT")),
-            "dreb_pct": _safe_float(r.get("DREB_PCT")),
-            "reb_pct": _safe_float(r.get("REB_PCT")),
-            "tov_pct": _safe_float(r.get("TO_PCT") or r.get("TOV_PCT")),
-            "efg_pct": _safe_float(r.get("EFG_PCT")),
-            "ts_pct": _safe_float(r.get("TS_PCT")),
-            "pace": _safe_float(r.get("PACE")),
-            "poss": _safe_float(r.get("POSS")),
+            "ast_pct": _safe_float(r.get("assistPercentage")),
+            "ast_to_tov": _safe_float(r.get("assistToTurnover")),
+            "ast_ratio": _safe_float(r.get("assistRatio")),
+            "oreb_pct": _safe_float(r.get("offensiveReboundPercentage")),
+            "dreb_pct": _safe_float(r.get("defensiveReboundPercentage")),
+            "reb_pct": _safe_float(r.get("reboundPercentage")),
+            "tov_pct": _safe_float(r.get("turnoverRatio")),
+            "efg_pct": _safe_float(r.get("effectiveFieldGoalPercentage")),
+            "ts_pct": _safe_float(r.get("trueShootingPercentage")),
+            "pace": _safe_float(r.get("pace")),
+            "poss": _safe_float(r.get("possessions")),
         }
 
     return [_team_row(r) for _, r in team_df.iterrows()], \
@@ -354,7 +384,6 @@ def ingest_advanced_box(conn: sqlite3.Connection, game_id: str) -> bool:
 # =========================================================================
 
 def list_unprocessed_games(conn: sqlite3.Connection) -> list[str]:
-    """Game IDs that don't have a successful traditional box yet (only Final games)."""
     rows = conn.execute(
         """
         SELECT g.game_id FROM games g
