@@ -1,4 +1,4 @@
-"""NBA Dashboard — entry point.
+"""NBA Dashboard — Home page.
 
 Run from project root:
     streamlit run dashboard/app.py
@@ -14,14 +14,14 @@ from lib.data import DB_PATH, db_mtime, latest_loaded_date
 from lib.format import HKT, hkt_now_label
 
 st.set_page_config(
-    page_title="NBA Dashboard",
+    page_title="NBA Dashboard — Home",
     page_icon="🏀",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 st.title("🏀 NBA Dashboard")
-st.caption("Post-game trend analysis — built for podcast prep")
+st.caption("Post-game trend analysis · podcast prep · odds compilation")
 
 # --- DB health banner ----------------------------------------------------
 if not DB_PATH.exists():
@@ -45,10 +45,10 @@ with st.container(border=True):
 st.markdown(
     """
     Use the sidebar to navigate:
-    - **Today** — games today and the next few days
+    - **Today** — games today, tomorrow, and the next 7 days
     - **Matchup** — pick a game, see everything you need before tip-off
-    - **Team Stats** — 4-layer split for all 30 teams
-    - **Player Stats** — 4-layer split for individual players
+    - **Team Stats** — 4-layer split for all 30 teams, with rank toggle
+    - **Player Stats** — 4-layer split for individual players, with percentile toggle
 
     To refresh the data, run `python -m scripts.run daily` in Terminal.
     """

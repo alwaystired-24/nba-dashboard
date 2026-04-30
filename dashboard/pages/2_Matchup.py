@@ -1,4 +1,8 @@
-"""Matchup deep dive — the podcast-prep page."""
+"""Matchup deep dive — the cockpit for podcast prep + odds compilation.
+
+Layout optimized for daily repeat use. Most-needed info above the fold,
+no hunting for stats.
+"""
 from __future__ import annotations
 
 import sys
@@ -16,6 +20,7 @@ from lib.data import (
     games_in_window,
     head_to_head,
     last_starting_lineup,
+    league_team_table,
     team_aggregate,
     team_lookup,
     team_opponent_aggregate,
@@ -24,7 +29,6 @@ from lib.data import (
 )
 from lib.filters import window_picker
 from lib.format import (
-    fmt_int,
     fmt_num,
     fmt_pct,
     hkt_to_et_date,
@@ -39,34 +43,46 @@ st.title("🥊 Matchup")
 mtime = db_mtime()
 tlookup = team_lookup(_mtime=mtime)
 
-# --- Game selector -------------------------------------------------------
+# =========================================================================
+# Game selector — defaults to next upcoming or most recent if none scheduled
+# =========================================================================
 sel = st.columns([2, 1, 1])
 with sel[0]:
     today_hkt = hkt_today()
-    pick_date = st.date_input("Browse games near (HKT)",
-                               value=date.fromisoformat(today_hkt))
+    pick_date = st.date_input("Browse games near (HKT)", value=date.fromisoformat(today_hkt))
 with sel[1]:
     days_back = st.number_input("Days back", 0, 14, value=2, step=1)
 with sel[2]:
-    days_forward = st.number_input("Days ahead", 0, 14, value=2, step=1)
+    days_forward = st.number_input("Days ahead", 0, 14, value=3, step=1)
 
 start = (pick_date - timedelta(days=int(days_back))).isoformat()
 end = (pick_date + timedelta(days=int(days_forward))).isoformat()
 games = games_in_window(hkt_to_et_date(start), hkt_to_et_date(end), _mtime=mtime)
 
 if games.empty:
-    st.warning("No games found in this window. Widen the days, or pick a different date.")
+    st.warning("No games in this window. Widen the days range or pick a different date.")
     st.stop()
 
-# Build a label per game for the dropdown
 def _label(row) -> str:
     score = ""
-    if row["status"] == "Final":
+    if row["status"] == "Final" and pd.notna(row["away_score"]):
         score = f" — {int(row['away_score'])}-{int(row['home_score'])}"
+    elif row["status"] == "Scheduled":
+        score = " — Scheduled"
+    elif row["status"] == "Live":
+        score = " — 🔴 LIVE"
     return f"{row['game_date']}  {matchup_label(row['home_abbr'], row['away_abbr'])}  ({row['season_type']}){score}"
 
 games = games.assign(label=games.apply(_label, axis=1))
-default_idx = len(games) - 1  # most recent first
+# Default selection: first Scheduled game on/after pick_date, else most recent Final
+target_et = hkt_to_et_date(pick_date.isoformat())
+scheduled_after = games[(games["status"] == "Scheduled") & (games["game_date"] >= target_et)]
+if not scheduled_after.empty:
+    default_idx = games.index.get_loc(scheduled_after.index[0])
+else:
+    final_games = games[games["status"] == "Final"]
+    default_idx = (games.index.get_loc(final_games.index[-1]) if not final_games.empty else 0)
+
 chosen_label = st.selectbox("Pick a game", games["label"].tolist(), index=default_idx)
 g = games[games["label"] == chosen_label].iloc[0]
 
@@ -74,73 +90,96 @@ window = window_picker(default="L10")
 
 home_id, away_id = int(g["home_team_id"]), int(g["away_team_id"])
 home, away = tlookup[home_id], tlookup[away_id]
+is_upcoming = g["status"] != "Final"
 
 # =========================================================================
-# Section A — Header
+# Compact header strip
 # =========================================================================
 hdr = st.container(border=True)
 with hdr:
-    cols = st.columns([2, 1, 2])
+    cols = st.columns([3, 2, 3])
     with cols[0]:
-        st.markdown(f"### {away['full_name']}")
         wA, lA = team_record(away_id, "Season", _mtime=mtime)
         wA_w, lA_w = team_record(away_id, window, _mtime=mtime)
+        st.markdown(f"### ✈️ {away['full_name']}")
         st.markdown(f"Season `{wA}-{lA}`  ·  {window} `{wA_w}-{lA_w}`")
     with cols[1]:
-        st.markdown(f"<h2 style='text-align:center;margin-top:1rem'>@</h2>",
-                     unsafe_allow_html=True)
-        st.caption(f"{g['game_date']} · {g['season_type']}")
-        st.caption(status_badge(g["status"]))
-        if g["status"] == "Final":
+        st.markdown(f"<div style='text-align:center'>"
+                     f"<h4>{g['game_date']} · {g['season_type']}</h4>"
+                     f"<p>{status_badge(g['status'])}</p>"
+                     "</div>", unsafe_allow_html=True)
+        if g["status"] == "Final" and pd.notna(g["away_score"]):
             st.markdown(
-                f"<h3 style='text-align:center'>{int(g['away_score'])} – {int(g['home_score'])}</h3>",
+                f"<h2 style='text-align:center;margin:0'>"
+                f"{int(g['away_score'])} – {int(g['home_score'])}</h2>",
                 unsafe_allow_html=True,
             )
     with cols[2]:
-        st.markdown(f"### {home['full_name']}")
         wH, lH = team_record(home_id, "Season", _mtime=mtime)
         wH_w, lH_w = team_record(home_id, window, _mtime=mtime)
+        st.markdown(f"### 🏠 {home['full_name']}")
         st.markdown(f"Season `{wH}-{lH}`  ·  {window} `{wH_w}-{lH_w}`")
 
-# H2H
-h2h = head_to_head(away_id, home_id, _mtime=mtime)
-if not h2h.empty:
-    st.markdown("**Head-to-head this season**")
-    home_wins = sum(1 for _, r in h2h.iterrows()
-                     if r["home_score"] is not None and r["away_score"] is not None
-                     and ((r["home_team_id"] == home_id and r["home_score"] > r["away_score"])
-                          or (r["away_team_id"] == home_id and r["away_score"] > r["home_score"])))
-    away_wins = len(h2h) - home_wins
-    st.caption(f"{away['abbreviation']} {away_wins} – {home_wins} {home['abbreviation']}  "
-                f"({len(h2h)} games)")
-    h2h_disp = h2h.assign(
-        score=lambda d: d.apply(lambda r: f"{int(r['away_score'])}-{int(r['home_score'])}"
-                                  if pd.notna(r['away_score']) else "—", axis=1)
-    )[["game_date", "away_abbr", "home_abbr", "score", "season_type"]]
-    h2h_disp.columns = ["Date", "Away", "Home", "Score", "Type"]
-    st.dataframe(h2h_disp, hide_index=True, width="stretch")
+# =========================================================================
+# League average baseline (used in Edge Finder and key metrics)
+# =========================================================================
+@st.cache_data(show_spinner=False)
+def _league_means(window: str, _mtime: float):
+    df = league_team_table(window, _mtime=_mtime)
+    return df.mean(numeric_only=True).to_dict()
+
+lg = _league_means(window, _mtime=mtime)
 
 st.divider()
 
 # =========================================================================
-# Section B — Form snapshot
+# Form snapshot — both teams side-by-side with league avg comparison
 # =========================================================================
 st.subheader(f"📊 Form snapshot — {window}")
+st.caption("Δ = team value vs league average. Green = better than league, red = worse.")
+
+def _delta_color(team_val, league_val, lower_is_better=False) -> str:
+    if team_val is None or league_val is None or pd.isna(team_val) or pd.isna(league_val):
+        return "off"
+    diff = team_val - league_val
+    if lower_is_better:
+        diff = -diff
+    return "normal" if abs(diff) > 0.01 else "off"
+
+def _delta_str(team_val, league_val, fmt=lambda x: f"{x:+.1f}"):
+    if team_val is None or league_val is None or pd.isna(team_val) or pd.isna(league_val):
+        return None
+    return fmt(team_val - league_val)
 
 def _form_block(team_id: int, team_name: str):
     agg = team_aggregate(team_id, window, _mtime=mtime)
     opp = team_opponent_aggregate(team_id, window, _mtime=mtime)
     st.markdown(f"#### {team_name}")
     g1, g2, g3, g4 = st.columns(4)
-    g1.metric("ORtg", fmt_num(agg.get("off_rating")))
-    g2.metric("DRtg", fmt_num(agg.get("def_rating")))
-    g3.metric("NetRtg", fmt_num(agg.get("net_rating")))
-    g4.metric("Pace", fmt_num(agg.get("pace")))
+    g1.metric("ORtg", fmt_num(agg.get("off_rating")),
+               _delta_str(agg.get("off_rating"), lg.get("off_rating")))
+    g2.metric("DRtg", fmt_num(agg.get("def_rating")),
+               _delta_str(agg.get("def_rating"), lg.get("def_rating")),
+               delta_color="inverse")
+    g3.metric("NetRtg", fmt_num(agg.get("net_rating")),
+               _delta_str(agg.get("net_rating"), lg.get("net_rating")))
+    g4.metric("Pace", fmt_num(agg.get("pace")),
+               _delta_str(agg.get("pace"), lg.get("pace")))
     g5, g6, g7, g8 = st.columns(4)
-    g5.metric("eFG%", fmt_pct(agg.get("efg_pct")))
-    g6.metric("TS%",  fmt_pct(agg.get("ts_pct")))
-    g7.metric("TOV%", fmt_num(agg.get("tov_pct")))
-    g8.metric("OPP eFG%", fmt_pct(opp.get("opp_efg_pct")))
+    g5.metric("eFG%", fmt_pct(agg.get("efg_pct")),
+               _delta_str(agg.get("efg_pct"), lg.get("efg_pct"),
+                           fmt=lambda x: f"{x*100:+.1f}pp"))
+    g6.metric("TS%", fmt_pct(agg.get("ts_pct")),
+               _delta_str(agg.get("ts_pct"), lg.get("ts_pct"),
+                           fmt=lambda x: f"{x*100:+.1f}pp"))
+    g7.metric("OPP eFG%", fmt_pct(opp.get("opp_efg_pct")),
+               _delta_str(opp.get("opp_efg_pct"), lg.get("opp_efg_pct"),
+                           fmt=lambda x: f"{x*100:+.1f}pp"),
+               delta_color="inverse")
+    g8.metric("OPP 3P%", fmt_pct(opp.get("opp_fg3_pct")),
+               _delta_str(opp.get("opp_fg3_pct"), lg.get("opp_fg3_pct"),
+                           fmt=lambda x: f"{x*100:+.1f}pp"),
+               delta_color="inverse")
 
 bcols = st.columns(2)
 with bcols[0]: _form_block(away_id, away["full_name"])
@@ -149,9 +188,9 @@ with bcols[1]: _form_block(home_id, home["full_name"])
 st.divider()
 
 # =========================================================================
-# Section C — Trend charts
+# Trend charts — both teams' L20
 # =========================================================================
-st.subheader("📈 Last 20 games — trends")
+st.subheader("📈 Last 20 games — trend")
 
 def _trend(team_id: int, team_name: str, color: str):
     df = team_recent_games(team_id, last_n=20, _mtime=mtime).sort_values("game_date")
@@ -177,12 +216,12 @@ with ccols[1]: _trend(home_id, home["full_name"], "#d62728")
 st.divider()
 
 # =========================================================================
-# Section D — Strength matchup grid
+# Edge Finder — expanded with league avg
 # =========================================================================
-st.subheader("⚔️ Edge finder")
+st.subheader("⚔️ Edge Finder")
 st.caption(
     f"Each team's offence vs the other team's defence ({window} averages). "
-    "Bigger gaps = bigger edges."
+    "League average shown for context. Bigger gaps = bigger edges."
 )
 
 a_off = team_aggregate(away_id, window, _mtime=mtime)
@@ -190,36 +229,43 @@ a_def = team_opponent_aggregate(away_id, window, _mtime=mtime)
 h_off = team_aggregate(home_id, window, _mtime=mtime)
 h_def = team_opponent_aggregate(home_id, window, _mtime=mtime)
 
-edge_data = [
+# (label, away_offense_value, home_defense_allowed, home_offense_value, away_defense_allowed, league_avg, format_fn)
+def _pct(x): return fmt_pct(x)
+def _num(x): return fmt_num(x)
+
+edge_rows = [
     ("ORtg vs DRtg", a_off.get("off_rating"), h_off.get("def_rating"),
-     h_off.get("off_rating"), a_off.get("def_rating")),
+     h_off.get("off_rating"), a_off.get("def_rating"), lg.get("off_rating"), _num),
     ("eFG% vs OPP eFG%", a_off.get("efg_pct"), h_def.get("opp_efg_pct"),
-     h_off.get("efg_pct"), a_def.get("opp_efg_pct")),
+     h_off.get("efg_pct"), a_def.get("opp_efg_pct"), lg.get("efg_pct"), _pct),
     ("TS% vs OPP TS%", a_off.get("ts_pct"), h_def.get("opp_ts_pct"),
-     h_off.get("ts_pct"), a_def.get("opp_ts_pct")),
-    ("Pace", a_off.get("pace"), None, h_off.get("pace"), None),
+     h_off.get("ts_pct"), a_def.get("opp_ts_pct"), lg.get("ts_pct"), _pct),
+    ("3P% vs OPP 3P%", a_off.get("fg3_pct"), h_def.get("opp_fg3_pct"),
+     h_off.get("fg3_pct"), a_def.get("opp_fg3_pct"), lg.get("fg3_pct"), _pct),
+    ("OREB vs OPP OREB", a_off.get("oreb"), h_def.get("opp_oreb"),
+     h_off.get("oreb"), a_def.get("opp_oreb"), lg.get("oreb"), _num),
+    ("Fouls drawn", a_off.get("pf"), None,  # FT-related; we proxy with personal fouls per team
+     h_off.get("pf"), None, lg.get("pf"), _num),
+    ("Pace", a_off.get("pace"), None,
+     h_off.get("pace"), None, lg.get("pace"), _num),
 ]
 
-def _fmt_pair(metric: str, val):
-    if "%" in metric:
-        return fmt_pct(val)
-    return fmt_num(val)
-
-edge_rows = []
-for metric, ao, hd, ho, ad in edge_data:
-    edge_rows.append({
+table_rows = []
+for metric, ao, hd, ho, ad, lavg, fmtfn in edge_rows:
+    table_rows.append({
         "Metric": metric,
-        f"{away['abbreviation']} OFF": _fmt_pair(metric, ao),
-        f"{home['abbreviation']} DEF allowed": _fmt_pair(metric, hd) if hd is not None else "—",
-        f"{home['abbreviation']} OFF": _fmt_pair(metric, ho),
-        f"{away['abbreviation']} DEF allowed": _fmt_pair(metric, ad) if ad is not None else "—",
+        f"{away['abbreviation']} OFF": fmtfn(ao),
+        f"{home['abbreviation']} D allowed": fmtfn(hd) if hd is not None else "—",
+        f"{home['abbreviation']} OFF": fmtfn(ho),
+        f"{away['abbreviation']} D allowed": fmtfn(ad) if ad is not None else "—",
+        "League avg": fmtfn(lavg) if lavg is not None else "—",
     })
-st.dataframe(pd.DataFrame(edge_rows), hide_index=True, width="stretch")
+st.dataframe(pd.DataFrame(table_rows), hide_index=True, width="stretch")
 
 st.divider()
 
 # =========================================================================
-# Section E — Player availability
+# Likely starters
 # =========================================================================
 st.subheader("👥 Likely starters (last game)")
 
@@ -239,5 +285,27 @@ scols = st.columns(2)
 with scols[0]: _starters_block(away_id, away["full_name"])
 with scols[1]: _starters_block(home_id, home["full_name"])
 
-st.caption("Note: starters shown are from the team's most recent completed game — "
+st.caption("Starters shown are from the team's most recent completed game — "
            "actual starters tonight may vary based on injuries / coach decisions.")
+
+# =========================================================================
+# H2H — collapsed by default
+# =========================================================================
+st.divider()
+with st.expander(f"📋 Head-to-head this season — {away['abbreviation']} vs {home['abbreviation']}", expanded=False):
+    h2h = head_to_head(away_id, home_id, _mtime=mtime)
+    if h2h.empty:
+        st.caption("No prior meetings this season.")
+    else:
+        home_wins = sum(1 for _, r in h2h.iterrows()
+                         if r["home_score"] is not None and r["away_score"] is not None
+                         and ((r["home_team_id"] == home_id and r["home_score"] > r["away_score"])
+                              or (r["away_team_id"] == home_id and r["away_score"] > r["home_score"])))
+        away_wins = len(h2h) - home_wins
+        st.caption(f"{away['abbreviation']} {away_wins} – {home_wins} {home['abbreviation']}  ({len(h2h)} games)")
+        h2h_disp = h2h.assign(
+            score=lambda d: d.apply(lambda r: f"{int(r['away_score'])}-{int(r['home_score'])}"
+                                      if pd.notna(r['away_score']) else "—", axis=1)
+        )[["game_date", "away_abbr", "home_abbr", "score", "season_type"]]
+        h2h_disp.columns = ["Date", "Away", "Home", "Score", "Type"]
+        st.dataframe(h2h_disp, hide_index=True, width="stretch")

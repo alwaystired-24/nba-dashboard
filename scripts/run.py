@@ -5,9 +5,8 @@ Usage:
     python -m scripts.run schedule       # refresh games table for current season
     python -m scripts.run backfill       # run all box-score scrapers for unprocessed Final games
     python -m scripts.run daily          # refresh schedule + ingest yesterday's & today's finished games
+    python -m scripts.run demographics   # pull position, age, height etc for active players
     python -m scripts.run status         # quick row counts / last-run summary
-
-Run with `-v` for debug logging.
 """
 from __future__ import annotations
 
@@ -17,6 +16,11 @@ import sys
 from typing import Sequence
 
 from .db import connect, init_schema
+from .demographics import (
+    backfill_demographics,
+    ensure_demographic_columns,
+    players_missing_demographics,
+)
 from .etl import (
     ingest_advanced_box,
     ingest_schedule,
@@ -27,15 +31,16 @@ from .etl import (
 from .nba import current_season
 
 
-def cmd_init(args: argparse.Namespace) -> int:
+def cmd_init(args):
     init_schema()
     with connect() as conn:
         n = seed_teams(conn)
+        ensure_demographic_columns(conn)
     print(f"Schema applied. Seeded {n} teams. Current season: {current_season()}")
     return 0
 
 
-def cmd_schedule(args: argparse.Namespace) -> int:
+def cmd_schedule(args):
     season = args.season or current_season()
     with connect() as conn:
         seed_teams(conn)
@@ -44,7 +49,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_backfill(args: argparse.Namespace) -> int:
+def cmd_backfill(args):
     with connect() as conn:
         seed_teams(conn)
         ingest_schedule(conn, season=args.season or current_season())
@@ -52,14 +57,12 @@ def cmd_backfill(args: argparse.Namespace) -> int:
         if args.limit:
             todo = todo[: args.limit]
     print(f"Box-score backfill: {len(todo)} games queued.")
-
     success_t = success_a = fail = 0
     for i, gid in enumerate(todo, 1):
         with connect() as conn:
             ok_t = ingest_traditional_box(conn, gid)
             ok_a = ingest_advanced_box(conn, gid)
-        success_t += int(ok_t)
-        success_a += int(ok_a)
+        success_t += int(ok_t); success_a += int(ok_a)
         fail += int(not (ok_t and ok_a))
         if i % 25 == 0 or i == len(todo):
             print(f"  [{i}/{len(todo)}] traditional={success_t}  advanced={success_a}  failed={fail}")
@@ -67,8 +70,7 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     return 0 if fail == 0 else 1
 
 
-def cmd_daily(args: argparse.Namespace) -> int:
-    """Designed for cron / GitHub Actions. Refreshes schedule then ingests anything new."""
+def cmd_daily(args):
     with connect() as conn:
         ingest_schedule(conn, season=current_season())
         todo = list_unprocessed_games(conn)
@@ -81,22 +83,44 @@ def cmd_daily(args: argparse.Namespace) -> int:
         success_t += int(ok_t); success_a += int(ok_a)
         fail += int(not (ok_t and ok_a))
     print(f"Daily update complete. traditional={success_t}, advanced={success_a}, failures={fail}")
+    with connect() as conn:
+        ensure_demographic_columns(conn)
+        new_players = players_missing_demographics(conn)
+    if new_players:
+        print(f"Fetching demographics for {len(new_players)} new player(s)...")
+        with connect() as conn:
+            backfill_demographics(conn)
     return 0 if fail == 0 else 1
 
 
-def cmd_status(args: argparse.Namespace) -> int:
+def cmd_demographics(args):
+    with connect() as conn:
+        ensure_demographic_columns(conn)
+        s, f = backfill_demographics(conn, limit=args.limit, refresh=args.refresh)
+    print(f"Done. success={s}, failures={f}")
+    return 0 if f == 0 else 1
+
+
+def cmd_status(args):
     with connect() as conn:
         for tbl in ("teams", "players", "games",
                      "team_box_traditional", "team_box_advanced",
                      "player_box_traditional", "player_box_advanced"):
             n = conn.execute(f"SELECT COUNT(*) AS c FROM {tbl}").fetchone()["c"]
             print(f"  {tbl:30s} {n:>8d}")
+        try:
+            info_n = conn.execute(
+                "SELECT COUNT(*) AS c FROM players WHERE info_fetched IS NOT NULL"
+            ).fetchone()["c"]
+            print(f"  players w/ demographics        {info_n:>8d}")
+        except Exception:
+            print(f"  players w/ demographics        (run init or demographics first)")
         last = conn.execute("SELECT MAX(last_attempt_utc) AS t FROM etl_runs").fetchone()
         print(f"  last_etl_run                   {last['t']}")
     return 0
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv=None):
     parser = argparse.ArgumentParser(prog="nba-dashboard")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -104,15 +128,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("init", help="create DB and populate teams").set_defaults(func=cmd_init)
 
     p = sub.add_parser("schedule", help="refresh the games table")
-    p.add_argument("--season", help="e.g. 2025-26 (default: current)")
+    p.add_argument("--season")
     p.set_defaults(func=cmd_schedule)
 
     p = sub.add_parser("backfill", help="ingest box scores for unprocessed Final games")
-    p.add_argument("--season", help="e.g. 2025-26 (default: current)")
-    p.add_argument("--limit", type=int, help="cap number of games this run (useful for testing)")
+    p.add_argument("--season")
+    p.add_argument("--limit", type=int)
     p.set_defaults(func=cmd_backfill)
 
     sub.add_parser("daily", help="schedule refresh + new-game ingest").set_defaults(func=cmd_daily)
+
+    p = sub.add_parser("demographics", help="pull position, age, height etc")
+    p.add_argument("--limit", type=int)
+    p.add_argument("--refresh", action="store_true")
+    p.set_defaults(func=cmd_demographics)
+
     sub.add_parser("status", help="row counts + last run").set_defaults(func=cmd_status)
 
     args = parser.parse_args(argv)

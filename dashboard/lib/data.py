@@ -332,6 +332,65 @@ def league_team_table(window: str, _mtime: float = 0.0) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# Stats where LOWER is better — used for rank direction
+LOWER_IS_BETTER = {
+    "def_rating", "tov", "tov_pct", "pf",
+    "opp_pts", "opp_fg_pct", "opp_fg3_pct", "opp_fg3a", "opp_fga",
+    "opp_efg_pct", "opp_ts_pct", "opp_tov_pct", "opp_reb", "opp_oreb", "opp_ast", "opp_tov",
+    "l",  # losses
+}
+
+
+def compute_team_ranks(df: pd.DataFrame) -> pd.DataFrame:
+    """Add rank columns per numeric stat. Higher = better unless in LOWER_IS_BETTER.
+    Returns a NEW dataframe with `_rank` columns appended for each numeric col."""
+    out = df.copy()
+    skip = {"team_id", "abbr", "team", "gp"}
+    for c in df.columns:
+        if c in skip or not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        ascending = c in LOWER_IS_BETTER
+        out[f"{c}_rank"] = df[c].rank(method="min", ascending=ascending,
+                                        na_option="bottom").astype("Int64")
+    return out
+
+
+def compute_league_averages(df: pd.DataFrame) -> dict:
+    """Mean of every numeric column across the team table — for the bottom row."""
+    out = {}
+    for c in df.columns:
+        if pd.api.types.is_numeric_dtype(df[c]):
+            out[c] = df[c].mean()
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def upcoming_games(start_date: str, days: int = 7, _mtime: float = 0.0) -> pd.DataFrame:
+    """All scheduled games from start_date forward, regardless of status.
+
+    The Phase 1 ETL only INSERTed games once a team finished one — this helper
+    relies on the daily ETL keeping the schedule sweep fresh. Future games show
+    up with status='Scheduled' from LeagueGameFinder once the NBA publishes them.
+    """
+    from datetime import date, timedelta
+    end_date = (date.fromisoformat(start_date) + timedelta(days=days)).isoformat()
+    with _connect() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT g.game_id, g.season_type, g.game_date, g.status,
+                   g.home_team_id, ht.abbreviation AS home_abbr, ht.full_name AS home_name,
+                   g.away_team_id, at.abbreviation AS away_abbr, at.full_name AS away_name,
+                   g.home_score, g.away_score
+            FROM games g
+            JOIN teams ht ON ht.team_id = g.home_team_id
+            JOIN teams at ON at.team_id = g.away_team_id
+            WHERE g.game_date BETWEEN ? AND ?
+            ORDER BY g.game_date, g.game_id
+            """,
+            conn, params=(start_date, end_date),
+        )
+
+
 # =========================================================================
 # PLAYER AGGREGATES
 # =========================================================================
@@ -430,12 +489,58 @@ def league_player_table(window: str, min_games: int = 5, min_minutes: float = 12
             """,
             conn,
         )
-    # Attach name + team abbr
-    plyrs = pd.read_sql_query("SELECT player_id, full_name AS player FROM players", _connect())
+    # Attach name, team abbr, and demographics (if pulled)
+    plyrs = pd.read_sql_query(
+        "SELECT player_id, full_name AS player, position, birthdate, height, weight, draft_year "
+        "FROM players",
+        _connect(),
+    )
     tms = teams(_mtime)[["team_id", "abbreviation"]].rename(columns={"abbreviation": "team"})
     df = df.merge(plyrs, on="player_id", how="left").merge(tms, on="team_id", how="left")
     df = df[(df["gp"] >= min_games) & (df["minutes"] >= min_minutes)]
+
+    # Compute age in years (decimal) from birthdate where available
+    if "birthdate" in df.columns:
+        df["birthdate_dt"] = pd.to_datetime(df["birthdate"], errors="coerce")
+        today = pd.Timestamp("today").normalize()
+        df["age"] = ((today - df["birthdate_dt"]).dt.days / 365.25).round(1)
+        df = df.drop(columns=["birthdate_dt"])
+
+    # Normalize position (NBA returns "Forward", "Guard-Forward" etc — collapse to G/F/C buckets)
+    if "position" in df.columns:
+        df["pos_bucket"] = df["position"].apply(_position_bucket)
+
     return df
+
+
+def _position_bucket(pos: str | None) -> str:
+    if not pos or not isinstance(pos, str):
+        return "—"
+    p = pos.upper()
+    if "GUARD" in p and "FORWARD" in p: return "G/F"
+    if "FORWARD" in p and "CENTER" in p: return "F/C"
+    if "GUARD" in p: return "G"
+    if "FORWARD" in p: return "F"
+    if "CENTER" in p: return "C"
+    return pos
+
+
+# Player stats where LOWER is better
+PLAYER_LOWER_IS_BETTER = {"def_rating", "tov", "tov_pct"}
+
+
+def compute_player_ranks(df: pd.DataFrame) -> pd.DataFrame:
+    """Add `_rank` columns to player table."""
+    out = df.copy()
+    skip = {"player_id", "team_id", "player", "team", "position", "pos_bucket",
+            "birthdate", "height", "weight", "draft_year", "age", "gp", "starts"}
+    for c in df.columns:
+        if c in skip or not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        ascending = c in PLAYER_LOWER_IS_BETTER
+        out[f"{c}_rank"] = df[c].rank(method="min", ascending=ascending,
+                                        na_option="bottom").astype("Int64")
+    return out
 
 
 # =========================================================================

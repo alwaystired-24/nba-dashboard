@@ -19,6 +19,7 @@ from typing import Any
 from nba_api.stats.endpoints import (
     boxscoreadvancedv3,
     boxscoretraditionalv3,
+    commonplayerinfo,
     leaguegamefinder,
 )
 from nba_api.stats.static import teams as static_teams
@@ -85,10 +86,86 @@ def fetch_schedule_for_season(season: str, season_type: str) -> list[dict]:
     return df.to_dict("records")
 
 
+def fetch_full_schedule(season: str) -> list[dict]:
+    """Use ScheduleLeagueV2 to get the full season schedule INCLUDING future games.
+
+    LeagueGameFinder only returns played games — this is the complement.
+    """
+    from nba_api.stats.endpoints import scheduleleaguev2
+    sched = call_with_retry(scheduleleaguev2.ScheduleLeagueV2, season=season)
+    df = sched.season_games.get_data_frame()
+    return df.to_dict("records")
+
+
+def _gamestatus_to_label(status: int) -> str:
+    """ScheduleLeagueV2 gameStatus: 1=Scheduled, 2=Live, 3=Final."""
+    return {1: "Scheduled", 2: "Live", 3: "Final"}.get(int(status), "Scheduled")
+
+
 def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
+    """Ingest both played AND future games. Combines two endpoints:
+
+    1. ScheduleLeagueV2 — full season including future games + game times
+    2. LeagueGameFinder — final scores for completed games (more reliable for scores)
+    """
     season = season or current_season()
     by_game: dict[str, dict[str, Any]] = {}
 
+    # ---- Step 1: Pull the full season schedule from ScheduleLeagueV2 ----
+    try:
+        full = fetch_full_schedule(season)
+        for r in full:
+            gid = str(r.get("gameId") or "").strip()
+            if not gid:
+                continue
+            home_id = _safe_int(r.get("homeTeam_teamId"))
+            away_id = _safe_int(r.get("awayTeam_teamId"))
+            if not home_id or not away_id:
+                continue
+
+            game_dt_et = r.get("gameDateTimeEst")  # ISO datetime in ET
+            game_date = (str(r.get("gameDateEst") or "")[:10]) or None
+            if not game_date and game_dt_et:
+                game_date = str(game_dt_et)[:10]
+
+            # gameLabel like "Regular Season" / "Playoffs" / "Play-In Tournament"
+            label = (r.get("gameLabel") or "").strip().lower()
+            if "play-in" in label or "playin" in label:
+                season_type = "PlayIn"
+            elif "playoff" in label or label.startswith("round") or "finals" in label:
+                season_type = "Playoffs"
+            elif "preseason" in label or "pre season" in label:
+                season_type = "PreSeason"
+            else:
+                season_type = "Regular"
+
+            home_score = _safe_int(r.get("homeTeam_score"))
+            away_score = _safe_int(r.get("awayTeam_score"))
+            status = _gamestatus_to_label(r.get("gameStatus") or 1)
+            # ScheduleLeagueV2 sometimes shows 0-0 for unplayed games
+            if status != "Final" and home_score == 0 and away_score == 0:
+                home_score = None
+                away_score = None
+
+            by_game[gid] = {
+                "game_id": gid,
+                "season": season,
+                "season_type": season_type,
+                "game_date": game_date,
+                "game_datetime_et": game_dt_et,
+                "home_team_id": home_id,
+                "away_team_id": away_id,
+                "home_score": home_score,
+                "away_score": away_score,
+                "status": status,
+                "arena": r.get("arenaName"),
+                "attendance": None,
+            }
+    except Exception as exc:
+        logger.warning("Full schedule fetch failed: %s", exc)
+
+    # ---- Step 2: Overlay LeagueGameFinder results for played games ----
+    # LeagueGameFinder is more authoritative for final scores
     for st in SEASON_TYPES:
         try:
             raw = fetch_schedule_for_season(season, st)
@@ -117,14 +194,23 @@ def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
                 "arena": None,
                 "attendance": None,
             })
+            # Don't overwrite with worse data — only fill in if missing
+            if entry.get("home_team_id") is None:
+                if is_home:
+                    entry["home_team_id"] = team_id
+                else:
+                    entry["away_team_id"] = team_id
+            # But always update score for played games (more reliable here)
             pts = r.get("PTS")
             pts = int(pts) if pts is not None and not _is_nan(pts) else None
-            if is_home:
-                entry["home_team_id"] = team_id
-                entry["home_score"] = pts
-            else:
-                entry["away_team_id"] = team_id
-                entry["away_score"] = pts
+            if pts is not None:
+                if is_home:
+                    entry["home_score"] = pts
+                else:
+                    entry["away_score"] = pts
+                # If we have scores from LeagueGameFinder, this game is Final
+                if r.get("WL") in ("W", "L"):
+                    entry["status"] = "Final"
 
     rows = [g for g in by_game.values()
             if g["home_team_id"] is not None and g["away_team_id"] is not None]
@@ -396,3 +482,66 @@ def list_unprocessed_games(conn: sqlite3.Connection) -> list[str]:
         """
     ).fetchall()
     return [r["game_id"] for r in rows]
+
+
+# =========================================================================
+# PLAYER DEMOGRAPHICS — commonplayerinfo (one-time, then occasional refresh)
+# =========================================================================
+
+def list_players_needing_info(conn: sqlite3.Connection) -> list[int]:
+    """Player IDs that have appeared in a box score but lack demographics."""
+    rows = conn.execute(
+        """
+        SELECT player_id FROM players
+        WHERE info_fetched IS NULL
+          AND player_id IN (SELECT DISTINCT player_id FROM player_box_traditional)
+        ORDER BY player_id
+        """
+    ).fetchall()
+    return [r["player_id"] for r in rows]
+
+
+def fetch_player_info(player_id: int) -> dict | None:
+    """Pull demographics for one player. Returns None on failure."""
+    try:
+        ep = call_with_retry(commonplayerinfo.CommonPlayerInfo, player_id=player_id)
+        df = ep.common_player_info.get_data_frame()
+        if df.empty:
+            return None
+        r = df.iloc[0].to_dict()
+        from datetime import datetime, timezone
+        return {
+            "player_id": int(r["PERSON_ID"]),
+            "full_name": r.get("DISPLAY_FIRST_LAST"),
+            "first_name": r.get("FIRST_NAME"),
+            "last_name": r.get("LAST_NAME"),
+            "is_active": 1 if r.get("ROSTERSTATUS") == "Active" else 0,
+            "birthdate": (r["BIRTHDATE"][:10] if r.get("BIRTHDATE") else None),
+            "position": r.get("POSITION") or None,
+            "height": r.get("HEIGHT") or None,
+            "weight": _safe_int(r.get("WEIGHT")),
+            "jersey": r.get("JERSEY") or None,
+            "team_id": _safe_int(r.get("TEAM_ID")) or None,
+            "draft_year": _safe_int(r.get("DRAFT_YEAR")),
+            "country": r.get("COUNTRY") or None,
+            "season_exp": _safe_int(r.get("SEASON_EXP")),
+            "info_fetched": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception:
+        logger.exception("commonplayerinfo failed for player_id=%s", player_id)
+        return None
+
+
+def ingest_player_info(conn: sqlite3.Connection, player_id: int) -> bool:
+    info = fetch_player_info(player_id)
+    if info is None:
+        return False
+    # Use a partial update — we don't want to wipe last_seen_date which lives in the
+    # same row but is set by the box-score ingest path.
+    sets = ", ".join(f"{k} = :{k}" for k in info if k != "player_id")
+    conn.execute(
+        f"UPDATE players SET {sets} WHERE player_id = :player_id",
+        info,
+    )
+    return True
+
