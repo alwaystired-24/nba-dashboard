@@ -1,22 +1,29 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
 
 # OS
 .DS_Store
+.AppleDouble
+.LSOverride
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
 
 # Secrets
 .env
+*.env
 
-# Old broken file from earlier
+# Old broken files (from earlier macOS hidden-file issue)
 gitignore
