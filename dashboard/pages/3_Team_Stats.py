@@ -1,4 +1,4 @@
-"""Team Stats — 4-layer split with rank toggle (1-30) and league average row."""
+"""Team Stats — 4-layer split with rank toggle and clickable drilldown."""
 from __future__ import annotations
 
 import sys
@@ -18,90 +18,169 @@ st.set_page_config(page_title="Team Stats", page_icon="🏟️", layout="wide")
 st.title("🏟️ Team Stats")
 
 mtime = db_mtime()
+tlookup = team_lookup(_mtime=mtime)
 
-# Defense-y / lower-is-better columns — rank inverted
 LOWER_IS_BETTER = {
     "def_rating", "tov_pct", "tov", "pf",
     "opp_pts", "opp_fg_pct", "opp_fg3_pct", "opp_fg3a", "opp_fga",
-    "opp_efg_pct", "opp_ts_pct", "opp_tov_pct", "opp_ast", "opp_reb",
-    "opp_oreb",
-    "l",  # losses — lower is better
+    "opp_efg_pct", "opp_ts_pct", "opp_tov_pct", "opp_ast", "opp_reb", "opp_oreb",
+    "l",
 }
 
-
+# =========================================================================
+# TOP CONTROLS
+# =========================================================================
 c1, c2, c3 = st.columns([1, 1, 1])
 with c1: window = window_picker(default="Season")
 with c2: layer = layer_picker(default="Traditional")
 with c3:
-    show_ranks = st.toggle("Show rank (1–30)", value=False,
-                            help="Show each team's rank for each metric.")
+    show_ranks = st.toggle("Show rank (1 = best)", value=False,
+                            help="Adds a rank column for each metric. 1 = league best, 30 = worst.")
 
-# Build the table
-df = league_team_table(window, _mtime=mtime)
+# =========================================================================
+# SIDEBAR FILTERS
+# =========================================================================
+abbrs = sorted({tlookup[t]["abbreviation"] for t in tlookup})
+conferences = sorted({tlookup[t]["conference"] for t in tlookup if tlookup[t].get("conference")})
+divisions = sorted({tlookup[t]["division"] for t in tlookup if tlookup[t].get("division")})
+
+with st.sidebar:
+    st.markdown("### 🎛️ Filters")
+    teams_sel = st.multiselect("Team(s)", abbrs, default=[], key="ts_teams")
+    conf_sel = st.multiselect("Conference", conferences, default=[], key="ts_conf") if conferences else []
+    div_sel = st.multiselect("Division", divisions, default=[], key="ts_div") if divisions else []
+
+    active = []
+    if teams_sel: active.append(f"{len(teams_sel)} team(s)")
+    if conf_sel: active.append(f"{len(conf_sel)} conf")
+    if div_sel: active.append(f"{len(div_sel)} div")
+    if active:
+        st.markdown(f"**Active:** {', '.join(active)}")
+    else:
+        st.caption("No filters active (all 30 teams)")
+
+# =========================================================================
+# DATA — ranks always vs full league
+# =========================================================================
+df_full = league_team_table(window, _mtime=mtime).reset_index(drop=True)
+
 specs = team_layer_columns(layer)
-keep = ["abbr", "team"] + [c for c, _, _ in specs]
-df_full = df[keep + ["team_id"]].copy()  # keep team_id for drilldown
-
-# Compute ranks if requested (even if not shown, used for color)
-ranks = {}
+rank_data = {}
 for col, _, _ in specs:
-    if col not in df_full.columns:
-        continue
-    if col in ("gp", "w"):
-        # neutral — don't rank
+    if col not in df_full.columns or col in ("gp", "w"):
         continue
     if col in LOWER_IS_BETTER:
-        ranks[col] = df_full[col].rank(ascending=True, method="min")
+        rank_data[col] = df_full[col].rank(ascending=True, method="min").astype("Int64")
     else:
-        ranks[col] = df_full[col].rank(ascending=False, method="min")
+        rank_data[col] = df_full[col].rank(ascending=False, method="min").astype("Int64")
 
-# Format display values
-df_disp = df_full.copy()
-for col, label, fn in specs:
-    if col in df_disp.columns:
-        if show_ranks and col in ranks:
-            df_disp[col] = [
-                f"{fn(v)}  ({int(r)})" if pd.notna(r) else fn(v)
-                for v, r in zip(df_disp[col], ranks[col])
-            ]
-        else:
-            df_disp[col] = df_disp[col].apply(fn)
+# Apply filters AFTER rank computation
+df = df_full.copy()
+df["conference"] = df["team_id"].map(lambda t: tlookup.get(int(t), {}).get("conference"))
+df["division"] = df["team_id"].map(lambda t: tlookup.get(int(t), {}).get("division"))
+if teams_sel:
+    df = df[df["abbr"].isin(teams_sel)]
+if conf_sel:
+    df = df[df["conference"].isin(conf_sel)]
+if div_sel:
+    df = df[df["division"].isin(div_sel)]
 
-# Append league average row
+if df.empty:
+    st.warning("No teams match these filters.")
+    st.stop()
+
+# Attach ranks
+for col, ranks in rank_data.items():
+    df[f"{col}_rank"] = ranks.reindex(df.index)
+
+# =========================================================================
+# BUILD DISPLAY
+# =========================================================================
+base_cols = ["abbr", "team"]
+stat_cols = [c for c, _, _ in specs if c in df.columns]
+df_view = df[base_cols + stat_cols + ["team_id"]].copy().reset_index(drop=True)
+
+if show_ranks:
+    for col, _, _ in specs:
+        rank_col = f"{col}_rank"
+        if rank_col in df.columns:
+            df_view[rank_col] = df.reset_index(drop=True)[rank_col]
+
+# League average row
 lg_row = {"abbr": "—", "team": "League avg", "team_id": -1}
-for col, _, fn in specs:
-    if col in df_full.columns and col not in ("w", "l", "gp"):
-        lg_row[col] = fn(df_full[col].mean())
-    elif col in ("w", "l", "gp"):
-        lg_row[col] = fn(df_full[col].mean())
+for col, _, _ in specs:
+    if col in df_full.columns:
+        lg_row[col] = df_full[col].mean()
     else:
-        lg_row[col] = "—"
+        lg_row[col] = None
+if show_ranks:
+    for col, _, _ in specs:
+        rank_col = f"{col}_rank"
+        if rank_col in df_view.columns:
+            lg_row[rank_col] = None
 
-df_disp_with_avg = pd.concat([df_disp, pd.DataFrame([lg_row])], ignore_index=True)
+df_view = pd.concat([df_view, pd.DataFrame([lg_row])], ignore_index=True)
 
-# Drop team_id from view, rename headers
-df_view = df_disp_with_avg.drop(columns=["team_id"]).rename(columns={
-    "abbr": "Tm", "team": "Team",
-    **{c: lbl for c, lbl, _ in specs},
-})
+# Convert ratios to display percentages
+for col, _, fn in specs:
+    if col in df_view.columns and fn is fmt_pct:
+        df_view[col] = df_view[col] * 100
+
+# Order columns: identity → for each stat: value, then rank
+ordered = ["abbr", "team"]
+for col, _, _ in specs:
+    if col in df_view.columns:
+        ordered.append(col)
+        if show_ranks and f"{col}_rank" in df_view.columns:
+            ordered.append(f"{col}_rank")
+df_view = df_view[ordered + ["team_id"]]
+
+# Build column_config
+col_config = {
+    "abbr": st.column_config.TextColumn("Tm"),
+    "team": st.column_config.TextColumn("Team"),
+    "team_id": None,
+}
+for col, label, fn in specs:
+    if col not in df_view.columns:
+        continue
+    if fn is fmt_pct:
+        col_config[col] = st.column_config.NumberColumn(label, format="%.1f")
+    elif fn is fmt_num:
+        col_config[col] = st.column_config.NumberColumn(label, format="%.1f")
+    else:
+        col_config[col] = st.column_config.NumberColumn(label, format="%d")
+    rank_col = f"{col}_rank"
+    if show_ranks and rank_col in df_view.columns:
+        col_config[rank_col] = st.column_config.NumberColumn(
+            f"{label}#", format="%d",
+            help=f"{label} league rank (1 = best, 30 = worst)",
+        )
 
 st.subheader(f"{layer} stats — {window}")
-st.caption(f"30 teams + league average row · sortable · click a row to see that team's last 20 games")
+st.caption(f"{len(df_view) - 1} teams + league avg row · ranks always vs full 30 teams.  "
+            "Click any column header to sort, click a row to drill in.")
 
 event = st.dataframe(
-    df_view, hide_index=True, width="stretch", height=620,
-    on_select="rerun", selection_mode="single-row",
+    df_view,
+    column_config=col_config,
+    hide_index=True,
+    width="stretch",
+    height=620,
+    on_select="rerun",
+    selection_mode="single-row",
 )
 
-# Drilldown
+# =========================================================================
+# DRILLDOWN
+# =========================================================================
 sel_rows = event.selection.rows if hasattr(event, "selection") else []
 if sel_rows:
     row_idx = sel_rows[0]
-    if row_idx < len(df_full):  # not the league-avg row
-        row = df_full.iloc[row_idx]
+    row = df_view.iloc[row_idx]
+    if int(row["team_id"]) != -1:
         team_id = int(row["team_id"])
         team_name = row["team"]
-        tlookup = team_lookup(_mtime=mtime)
 
         st.divider()
         st.subheader(f"📋 {team_name} — last 20 games")
@@ -111,24 +190,32 @@ if sel_rows:
             st.caption("No games found.")
         else:
             games = games.copy()
-            games["opp"] = games["opp_id"].map(lambda x: tlookup.get(int(x), {}).get("abbreviation", "—"))
+            games["opp"] = games["opp_id"].map(
+                lambda x: tlookup.get(int(x), {}).get("abbreviation", "—")
+            )
             games["score"] = games.apply(
                 lambda r: f"{int(r['pts'])}-{int(r['opp_pts'])}" if pd.notna(r["pts"]) else "—",
                 axis=1,
             )
-            games["fg_pct"] = games["fg_pct"].apply(fmt_pct)
-            games["fg3_pct"] = games["fg3_pct"].apply(fmt_pct)
-            games["efg_pct"] = games["efg_pct"].apply(fmt_pct)
-            games["ts_pct"] = games["ts_pct"].apply(fmt_pct)
-            for c in ("off_rating", "def_rating", "net_rating", "pace"):
-                games[c] = games[c].apply(fmt_num)
+            for c in ("fg_pct", "fg3_pct", "efg_pct", "ts_pct"):
+                if c in games.columns:
+                    games[c] = games[c] * 100
 
-            disp = games[["game_date", "site", "opp", "score",
-                           "off_rating", "def_rating", "net_rating", "pace",
-                           "efg_pct", "ts_pct", "fg_pct", "fg3_pct"]].rename(columns={
-                "game_date": "Date", "site": "H/A", "opp": "OPP", "score": "Score",
-                "off_rating": "ORtg", "def_rating": "DRtg", "net_rating": "Net",
-                "pace": "Pace", "efg_pct": "eFG%", "ts_pct": "TS%",
-                "fg_pct": "FG%", "fg3_pct": "3P%",
-            })
-            st.dataframe(disp, hide_index=True, width="stretch")
+            drill_view = games[["game_date", "site", "opp", "score",
+                                 "off_rating", "def_rating", "net_rating", "pace",
+                                 "efg_pct", "ts_pct", "fg_pct", "fg3_pct"]]
+            drill_config = {
+                "game_date": st.column_config.TextColumn("Date"),
+                "site": st.column_config.TextColumn("H/A"),
+                "opp": st.column_config.TextColumn("OPP"),
+                "score": st.column_config.TextColumn("Score"),
+                "off_rating": st.column_config.NumberColumn("ORtg", format="%.1f"),
+                "def_rating": st.column_config.NumberColumn("DRtg", format="%.1f"),
+                "net_rating": st.column_config.NumberColumn("Net", format="%.1f"),
+                "pace": st.column_config.NumberColumn("Pace", format="%.1f"),
+                "efg_pct": st.column_config.NumberColumn("eFG%", format="%.1f"),
+                "ts_pct": st.column_config.NumberColumn("TS%", format="%.1f"),
+                "fg_pct": st.column_config.NumberColumn("FG%", format="%.1f"),
+                "fg3_pct": st.column_config.NumberColumn("3P%", format="%.1f"),
+            }
+            st.dataframe(drill_view, column_config=drill_config, hide_index=True, width="stretch")
