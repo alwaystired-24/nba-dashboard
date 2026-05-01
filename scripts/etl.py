@@ -212,8 +212,19 @@ def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
                 if r.get("WL") in ("W", "L"):
                     entry["status"] = "Final"
 
+    # Only keep games where both teams exist in our teams table
+    # (skips G League, international, all-star, or other non-NBA games)
+    valid_team_ids = {row[0] for row in conn.execute("SELECT team_id FROM teams")}
+
     rows = [g for g in by_game.values()
-            if g["home_team_id"] is not None and g["away_team_id"] is not None]
+            if g["home_team_id"] is not None and g["away_team_id"] is not None
+            and g["home_team_id"] in valid_team_ids
+            and g["away_team_id"] in valid_team_ids]
+
+    skipped = len(by_game) - len(rows)
+    if skipped > 0:
+        logger.info("Skipped %d games with non-NBA team IDs", skipped)
+
     return upsert(conn, "games", rows, pk=["game_id"])
 
 

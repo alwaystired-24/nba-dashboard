@@ -1,0 +1,80 @@
+name: Odds Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'Snapshot phase'
+        required: true
+        default: 'manual'
+        type: choice
+        options:
+          - opener
+          - pre_game
+          - late
+          - manual
+  schedule:
+    # All times in UTC. Comments show HKT equivalent.
+    - cron: '0 14 * * *'   # 22:00 HKT  → opener
+    - cron: '30 23 * * *'  # 07:30 HKT next day → pre_game
+    - cron: '0 4 * * *'    # 12:00 HKT → late
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 10
+    env:
+      THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Determine phase from cron
+        id: phase
+        run: |
+          # Manual run uses input; scheduled runs derive from current UTC hour
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.phase }}" >> "$GITHUB_OUTPUT"
+          else
+            HOUR=$(date -u +%H)
+            case "$HOUR" in
+              14) echo "value=opener" >> "$GITHUB_OUTPUT" ;;
+              23) echo "value=pre_game" >> "$GITHUB_OUTPUT" ;;
+              04) echo "value=late" >> "$GITHUB_OUTPUT" ;;
+              *)  echo "value=manual" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run odds fetch
+        run: python -m scripts.run odds --phase ${{ steps.phase.outputs.value }}
+
+      - name: Verify DB modified
+        run: |
+          if [ ! -f data/nba.db ]; then
+            echo "::error::data/nba.db missing after odds run"
+            exit 1
+          fi
+          ls -la data/
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/nba.db
+          if git diff --staged --quiet; then
+            echo "No changes — skipping commit."
+          else
+            git commit -m "Odds update: ${{ steps.phase.outputs.value }} $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi

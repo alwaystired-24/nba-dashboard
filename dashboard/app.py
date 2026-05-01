@@ -12,6 +12,7 @@ import streamlit as st
 
 from lib.data import DB_PATH, db_mtime, latest_loaded_date
 from lib.format import HKT, hkt_now_label
+from lib.freshness import show_freshness_banner
 
 st.set_page_config(
     page_title="NBA Dashboard — Home",
@@ -35,6 +36,9 @@ if not DB_PATH.exists():
 mtime = db_mtime()
 last_data_date = latest_loaded_date(_mtime=mtime)
 mtime_dt = datetime.fromtimestamp(mtime, tz=HKT)
+
+# Stale-data warnings (schedule + orphan odds)
+show_freshness_banner(mtime)
 
 with st.container(border=True):
     cols = st.columns(3)

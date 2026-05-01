@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Unique identifier for this job -->
+    <key>Label</key>
+    <string>com.eddy.nba-dashboard-daily</string>
+
+    <!-- Path to the wrapper shell script -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/edwardlam/Documents/nba-dashboard/launchd/run-daily.sh</string>
+    </array>
+
+    <!-- Run every day at 09:00 HKT (HKT is UTC+8, no DST) -->
+    <!-- launchd uses LOCAL time on the Mac, so set 09:00 directly if Mac is on HKT -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- If the Mac was asleep at the scheduled time, run it as soon as it wakes -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Keep failed jobs from auto-retrying nonstop -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- launchd captures stdout/stderr too, just in case our wrapper misses anything -->
+    <key>StandardOutPath</key>
+    <string>/Users/edwardlam/Library/Logs/nba-dashboard-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/edwardlam/Library/Logs/nba-dashboard-launchd.log</string>
+</dict>
+</plist>

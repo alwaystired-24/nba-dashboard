@@ -21,6 +21,7 @@ from .demographics import (
     ensure_demographic_columns,
     players_missing_demographics,
 )
+from .odds import run_odds_fetch, ensure_odds_schema
 from .etl import (
     ingest_advanced_box,
     ingest_schedule,
@@ -90,6 +91,19 @@ def cmd_daily(args):
         print(f"Fetching demographics for {len(new_players)} new player(s)...")
         with connect() as conn:
             backfill_demographics(conn)
+
+    # Auto-rematch any orphan odds events to newly-available games
+    try:
+        from .odds import rematch_orphan_events, ensure_odds_schema
+        with connect() as conn:
+            ensure_odds_schema(conn)
+            res = rematch_orphan_events(conn)
+        if res["checked"] > 0:
+            print(f"Orphan odds rematch: checked {res['checked']}, "
+                   f"matched {res['rematched']}, still orphan {res['still_orphan']}")
+    except Exception as exc:
+        print(f"(Skipped orphan odds rematch: {exc})")
+
     return 0 if fail == 0 else 1
 
 
@@ -101,11 +115,38 @@ def cmd_demographics(args):
     return 0 if f == 0 else 1
 
 
+def cmd_odds(args):
+    with connect() as conn:
+        ensure_odds_schema(conn)
+        try:
+            summary = run_odds_fetch(conn, phase=args.phase)
+        except Exception as exc:
+            print(f"Odds fetch failed: {exc}")
+            return 1
+    print(f"Odds fetch complete:")
+    print(f"  phase:              {summary['phase']}")
+    print(f"  events fetched:     {summary['events_fetched']}")
+    print(f"  snapshots stored:   {summary['snapshots_stored']}")
+    print(f"  mappings stored:    {summary['mappings_stored']}")
+    print(f"  this call cost:     {summary['this_call_cost']} credits")
+    print(f"  credits remaining:  {summary['credits_remaining']}")
+    return 0
+
+
+def cmd_odds_init(args):
+    """One-time: apply migration 002, no API call."""
+    with connect() as conn:
+        ensure_odds_schema(conn)
+    print("Odds schema applied. You can now run `python -m scripts.run odds --phase manual` to test.")
+    return 0
+
+
 def cmd_status(args):
     with connect() as conn:
         for tbl in ("teams", "players", "games",
                      "team_box_traditional", "team_box_advanced",
-                     "player_box_traditional", "player_box_advanced"):
+                     "player_box_traditional", "player_box_advanced",
+                     "odds_snapshots"):
             n = conn.execute(f"SELECT COUNT(*) AS c FROM {tbl}").fetchone()["c"]
             print(f"  {tbl:30s} {n:>8d}")
         try:
@@ -142,6 +183,14 @@ def main(argv=None):
     p.add_argument("--limit", type=int)
     p.add_argument("--refresh", action="store_true")
     p.set_defaults(func=cmd_demographics)
+
+    p = sub.add_parser("odds", help="fetch current NBA odds from The Odds API")
+    p.add_argument("--phase", default="manual",
+                    choices=["opener", "pre_game", "late", "manual"],
+                    help="snapshot phase tag for the rows we insert")
+    p.set_defaults(func=cmd_odds)
+
+    sub.add_parser("odds_init", help="apply odds schema migration (one-time)").set_defaults(func=cmd_odds_init)
 
     sub.add_parser("status", help="row counts + last run").set_defaults(func=cmd_status)
 

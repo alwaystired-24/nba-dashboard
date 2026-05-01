@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from lib.data import DB_PATH, db_mtime, league_player_table, team_lookup
+from lib.freshness import show_freshness_banner
 from lib.filters import layer_picker, window_picker
 from lib.format import fmt_num, fmt_pct
 from lib.stats import player_layer_columns
@@ -19,6 +20,7 @@ st.set_page_config(page_title="Player Stats", page_icon="🧍", layout="wide")
 st.title("🧍 Player Stats")
 
 mtime = db_mtime()
+show_freshness_banner(mtime)
 tlookup = team_lookup(_mtime=mtime)
 
 LOWER_IS_BETTER = {"def_rating", "tov", "pf"}

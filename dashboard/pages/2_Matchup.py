@@ -27,6 +27,7 @@ from lib.data import (
     team_recent_games,
     team_record,
 )
+from lib.freshness import show_freshness_banner
 from lib.filters import window_picker
 from lib.format import (
     fmt_num,
@@ -41,6 +42,7 @@ st.set_page_config(page_title="Matchup", page_icon="🥊", layout="wide")
 st.title("🥊 Matchup")
 
 mtime = db_mtime()
+show_freshness_banner(mtime)
 tlookup = team_lookup(_mtime=mtime)
 
 # =========================================================================
@@ -309,3 +311,144 @@ with st.expander(f"📋 Head-to-head this season — {away['abbreviation']} vs {
         )[["game_date", "away_abbr", "home_abbr", "score", "season_type"]]
         h2h_disp.columns = ["Date", "Away", "Home", "Score", "Type"]
         st.dataframe(h2h_disp, hide_index=True, width="stretch")
+
+
+# =========================================================================
+# ODDS — Phase 6
+# =========================================================================
+from lib.odds_data import odds_for_game
+from lib.odds_math import fair_line_report, decimal_to_american
+
+st.divider()
+st.subheader("💰 Odds")
+
+odds_df = odds_for_game(g["game_id"], _mtime=mtime)
+
+if odds_df.empty:
+    st.info(
+        "No odds data captured for this game yet. "
+        "Odds are fetched 3× daily by the GitHub Actions workflow "
+        "(opener / pre_game / late). Check back closer to tip-off."
+    )
+else:
+    # Get the most recent snapshot per book per market
+    odds_df = odds_df.sort_values("fetched_utc")
+    latest = (odds_df.groupby(["bookmaker", "market"], as_index=False)
+                       .tail(1).reset_index(drop=True))
+
+    st.caption(f"{len(odds_df)} total snapshots across {odds_df['snapshot_phase'].nunique()} phases. "
+                f"Showing latest line per book/market below.")
+
+    # ---- Current lines per book ----
+    st.markdown("#### Current lines")
+    lines_rows = []
+    for bm in latest["bookmaker"].unique():
+        bm_rows = latest[latest["bookmaker"] == bm]
+        h2h = bm_rows[bm_rows["market"] == "h2h"].iloc[0] if not bm_rows[bm_rows["market"] == "h2h"].empty else None
+        sp  = bm_rows[bm_rows["market"] == "spreads"].iloc[0] if not bm_rows[bm_rows["market"] == "spreads"].empty else None
+        tot = bm_rows[bm_rows["market"] == "totals"].iloc[0] if not bm_rows[bm_rows["market"] == "totals"].empty else None
+
+        row = {"Book": bm.upper()}
+        if h2h is not None:
+            row[f"{away['abbreviation']} ML"] = decimal_to_american(h2h["away_price"])
+            row[f"{home['abbreviation']} ML"] = decimal_to_american(h2h["home_price"])
+        if sp is not None:
+            row[f"{away['abbreviation']} Spread"] = (
+                f"{sp['spread_away']:+.1f} ({decimal_to_american(sp['away_price'])})"
+                if pd.notna(sp['spread_away']) else "—"
+            )
+            row[f"{home['abbreviation']} Spread"] = (
+                f"{sp['spread_home']:+.1f} ({decimal_to_american(sp['home_price'])})"
+                if pd.notna(sp['spread_home']) else "—"
+            )
+        if tot is not None:
+            row["Total"] = f"{tot['total_line']}" if pd.notna(tot['total_line']) else "—"
+            row["Over"] = decimal_to_american(tot["over_price"])
+            row["Under"] = decimal_to_american(tot["under_price"])
+        lines_rows.append(row)
+    st.dataframe(pd.DataFrame(lines_rows), hide_index=True, width="stretch")
+
+    # ---- Implied probability + vig + no-vig fair line ----
+    st.markdown("#### Implied probability · Vig · No-vig fair line")
+    fair_rows = []
+    for _, r in latest.iterrows():
+        if r["market"] == "h2h":
+            rep = fair_line_report(r["away_price"], r["home_price"])
+            fair_rows.append({
+                "Book": r["bookmaker"].upper(),
+                "Market": "Moneyline",
+                f"{away['abbreviation']} implied %": f"{rep['implied_prob_a']*100:.1f}%" if rep['implied_prob_a'] else "—",
+                f"{home['abbreviation']} implied %": f"{rep['implied_prob_b']*100:.1f}%" if rep['implied_prob_b'] else "—",
+                f"{away['abbreviation']} fair %": f"{rep['fair_prob_a']*100:.1f}%" if rep['fair_prob_a'] else "—",
+                f"{home['abbreviation']} fair %": f"{rep['fair_prob_b']*100:.1f}%" if rep['fair_prob_b'] else "—",
+                f"{away['abbreviation']} fair price": f"{rep['fair_decimal_a']:.3f}" if rep['fair_decimal_a'] else "—",
+                f"{home['abbreviation']} fair price": f"{rep['fair_decimal_b']:.3f}" if rep['fair_decimal_b'] else "—",
+                "Vig %": f"{rep['vig_pct']:.2f}%" if rep['vig_pct'] is not None else "—",
+            })
+        elif r["market"] == "spreads":
+            rep = fair_line_report(r["away_price"], r["home_price"])
+            fair_rows.append({
+                "Book": r["bookmaker"].upper(),
+                "Market": f"Spread {r['spread_away']:+.1f}/{r['spread_home']:+.1f}",
+                f"{away['abbreviation']} implied %": f"{rep['implied_prob_a']*100:.1f}%" if rep['implied_prob_a'] else "—",
+                f"{home['abbreviation']} implied %": f"{rep['implied_prob_b']*100:.1f}%" if rep['implied_prob_b'] else "—",
+                f"{away['abbreviation']} fair %": f"{rep['fair_prob_a']*100:.1f}%" if rep['fair_prob_a'] else "—",
+                f"{home['abbreviation']} fair %": f"{rep['fair_prob_b']*100:.1f}%" if rep['fair_prob_b'] else "—",
+                f"{away['abbreviation']} fair price": f"{rep['fair_decimal_a']:.3f}" if rep['fair_decimal_a'] else "—",
+                f"{home['abbreviation']} fair price": f"{rep['fair_decimal_b']:.3f}" if rep['fair_decimal_b'] else "—",
+                "Vig %": f"{rep['vig_pct']:.2f}%" if rep['vig_pct'] is not None else "—",
+            })
+        elif r["market"] == "totals":
+            rep = fair_line_report(r["over_price"], r["under_price"])
+            fair_rows.append({
+                "Book": r["bookmaker"].upper(),
+                "Market": f"Total {r['total_line']}",
+                f"{away['abbreviation']} implied %": f"O: {rep['implied_prob_a']*100:.1f}%" if rep['implied_prob_a'] else "—",
+                f"{home['abbreviation']} implied %": f"U: {rep['implied_prob_b']*100:.1f}%" if rep['implied_prob_b'] else "—",
+                f"{away['abbreviation']} fair %": f"O: {rep['fair_prob_a']*100:.1f}%" if rep['fair_prob_a'] else "—",
+                f"{home['abbreviation']} fair %": f"U: {rep['fair_prob_b']*100:.1f}%" if rep['fair_prob_b'] else "—",
+                f"{away['abbreviation']} fair price": f"O: {rep['fair_decimal_a']:.3f}" if rep['fair_decimal_a'] else "—",
+                f"{home['abbreviation']} fair price": f"U: {rep['fair_decimal_b']:.3f}" if rep['fair_decimal_b'] else "—",
+                "Vig %": f"{rep['vig_pct']:.2f}%" if rep['vig_pct'] is not None else "—",
+            })
+    st.dataframe(pd.DataFrame(fair_rows), hide_index=True, width="stretch")
+
+    # ---- Line movement chart ----
+    st.markdown("#### Line movement")
+    movement_market = st.radio("Market", ["spreads", "totals", "h2h"],
+                                  horizontal=True, key="line_move_market")
+    move_data = odds_df[odds_df["market"] == movement_market].copy()
+    if move_data.empty:
+        st.caption(f"No {movement_market} snapshots yet.")
+    else:
+        move_data["fetched_dt"] = pd.to_datetime(move_data["fetched_utc"])
+        fig = go.Figure()
+        if movement_market == "spreads":
+            for bm in move_data["bookmaker"].unique():
+                d = move_data[move_data["bookmaker"] == bm].sort_values("fetched_dt")
+                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["spread_home"],
+                                           name=f"{bm.upper()} {home['abbreviation']} spread",
+                                           mode="lines+markers"))
+            fig.update_layout(yaxis_title=f"{home['abbreviation']} spread")
+        elif movement_market == "totals":
+            for bm in move_data["bookmaker"].unique():
+                d = move_data[move_data["bookmaker"] == bm].sort_values("fetched_dt")
+                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["total_line"],
+                                           name=f"{bm.upper()} total", mode="lines+markers"))
+            fig.update_layout(yaxis_title="Total")
+        else:  # h2h
+            for bm in move_data["bookmaker"].unique():
+                d = move_data[move_data["bookmaker"] == bm].sort_values("fetched_dt")
+                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["home_price"],
+                                           name=f"{bm.upper()} {home['abbreviation']} ML",
+                                           mode="lines+markers"))
+                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["away_price"],
+                                           name=f"{bm.upper()} {away['abbreviation']} ML",
+                                           mode="lines+markers", line=dict(dash="dash")))
+            fig.update_layout(yaxis_title="Decimal price")
+        fig.update_layout(
+            height=350, margin=dict(l=10, r=10, t=20, b=10),
+            xaxis_title="Snapshot time (UTC)",
+            legend=dict(orientation="h", y=-0.15),
+        )
+        st.plotly_chart(fig, width="stretch")

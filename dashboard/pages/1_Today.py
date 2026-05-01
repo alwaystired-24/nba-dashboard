@@ -17,6 +17,7 @@ from lib.data import (
     team_aggregate,
     team_record,
 )
+from lib.freshness import show_freshness_banner
 from lib.format import (
     fmt_num,
     hkt_to_et_date,
@@ -29,6 +30,7 @@ st.set_page_config(page_title="Today's Games", page_icon="📅", layout="wide")
 st.title("📅 Today & Upcoming")
 
 mtime = db_mtime()
+show_freshness_banner(mtime)
 
 # --- Range we want: yesterday, today, tomorrow, +5 more ----------------
 today = date.fromisoformat(hkt_today())
