@@ -314,6 +314,12 @@ def rematch_orphan_events(conn: sqlite3.Connection) -> dict:
     Called from `daily` after schedule refresh — heals orphans that were
     captured before their corresponding games were in our schedule.
 
+    Two passes:
+      1. Try to find game_ids for events still in odds_event_mapping with NULL
+         game_id (using the team-name+date matcher).
+      2. Sync odds_snapshots.game_id from odds_event_mapping wherever they
+         share an event_id but the snapshot row's game_id is NULL.
+
     Returns dict with counts.
     """
     orphans = conn.execute(
@@ -349,10 +355,28 @@ def rematch_orphan_events(conn: sqlite3.Connection) -> dict:
             still_orphan += 1
 
     conn.commit()
+
+    # Pass 2: always sync odds_snapshots.game_id from the mapping table.
+    # Even if pass 1 found no new orphans to match, mapping might already have
+    # game_ids that snapshots don't reflect (e.g., from a previous run).
+    sync_result = conn.execute(
+        """
+        UPDATE odds_snapshots
+        SET game_id = (
+            SELECT m.game_id FROM odds_event_mapping m
+            WHERE m.event_id = odds_snapshots.event_id
+        )
+        WHERE game_id IS NULL AND event_id IS NOT NULL
+        """
+    )
+    snapshots_synced = sync_result.rowcount
+    conn.commit()
+
     return {
         "checked": len(orphans),
         "rematched": matched,
         "still_orphan": still_orphan,
+        "snapshots_synced": snapshots_synced,
     }
 
 

@@ -46,26 +46,69 @@ show_freshness_banner(mtime)
 tlookup = team_lookup(_mtime=mtime)
 
 # =========================================================================
-# Game selector — defaults to next upcoming or most recent if none scheduled
+# Game selector — two-dropdown design: pick HKT date, then pick game
 # =========================================================================
-sel = st.columns([2, 1, 1])
-with sel[0]:
-    today_hkt = hkt_today()
-    pick_date = st.date_input("Browse games near (HKT)", value=date.fromisoformat(today_hkt))
-with sel[1]:
-    days_back = st.number_input("Days back", 0, 14, value=2, step=1)
-with sel[2]:
-    days_forward = st.number_input("Days ahead", 0, 14, value=3, step=1)
+today_hkt = hkt_today()
+today_et = hkt_to_et_date(today_hkt)
 
-start = (pick_date - timedelta(days=int(days_back))).isoformat()
-end = (pick_date + timedelta(days=int(days_forward))).isoformat()
-games = games_in_window(hkt_to_et_date(start), hkt_to_et_date(end), _mtime=mtime)
+# Pull a wide window — past 14 days through next 14 days
+wide_start = (date.fromisoformat(today_hkt) - timedelta(days=14)).isoformat()
+wide_end = (date.fromisoformat(today_hkt) + timedelta(days=14)).isoformat()
+all_games = games_in_window(
+    hkt_to_et_date(wide_start), hkt_to_et_date(wide_end), _mtime=mtime,
+)
 
-if games.empty:
-    st.warning("No games in this window. Widen the days range or pick a different date.")
+if all_games.empty:
+    st.warning("No games found in the surrounding 4-week window. "
+                "Run `python -m scripts.run schedule` to refresh.")
     st.stop()
 
-def _label(row) -> str:
+# Each ET game date maps to an HKT date by adding 1 day
+# (NBA games tip in evening ET = morning/afternoon next day HKT)
+def _et_to_hkt_date(et_date: str) -> str:
+    return (date.fromisoformat(et_date) + timedelta(days=1)).isoformat()
+
+all_games = all_games.assign(
+    hkt_date=all_games["game_date"].apply(_et_to_hkt_date),
+)
+
+# --- Date dropdown — only dates that have games -----------------------
+hkt_dates_with_games = sorted(all_games["hkt_date"].unique())
+
+# Default: today HKT if it has games, else the next future date with games,
+# else the most recent past date with games
+def _pick_default_date(dates: list[str]) -> str:
+    if today_hkt in dates:
+        return today_hkt
+    future = [d for d in dates if d > today_hkt]
+    if future:
+        return future[0]
+    return dates[-1]
+
+default_date = _pick_default_date(hkt_dates_with_games)
+
+# Friendly label: "Today (Sat 02 May)" / "Tomorrow (Sun 03 May)" / "Sat 02 May"
+def _date_label(d: str) -> str:
+    dt = date.fromisoformat(d)
+    delta = (dt - date.fromisoformat(today_hkt)).days
+    pretty = dt.strftime("%a %d %b")
+    if delta == 0:  return f"Today  ·  {pretty}"
+    if delta == 1:  return f"Tomorrow  ·  {pretty}"
+    if delta == -1: return f"Yesterday  ·  {pretty}"
+    return pretty
+
+date_labels = [_date_label(d) for d in hkt_dates_with_games]
+default_idx = hkt_dates_with_games.index(default_date)
+
+dcol, gcol = st.columns([1, 2])
+with dcol:
+    chosen_date_label = st.selectbox("Date (HKT)", date_labels, index=default_idx)
+chosen_hkt_date = hkt_dates_with_games[date_labels.index(chosen_date_label)]
+
+# --- Game dropdown — only games on the chosen date --------------------
+day_games = all_games[all_games["hkt_date"] == chosen_hkt_date].copy()
+
+def _game_label(row) -> str:
     score = ""
     if row["status"] == "Final" and pd.notna(row["away_score"]):
         score = f" — {int(row['away_score'])}-{int(row['home_score'])}"
@@ -73,26 +116,21 @@ def _label(row) -> str:
         score = " — Scheduled"
     elif row["status"] == "Live":
         score = " — 🔴 LIVE"
-    return f"{row['game_date']}  {matchup_label(row['home_abbr'], row['away_abbr'])}  ({row['season_type']}){score}"
+    return f"{matchup_label(row['home_abbr'], row['away_abbr'])}  ({row['season_type']}){score}"
 
-games = games.assign(label=games.apply(_label, axis=1))
-# Default selection: first Scheduled game on/after pick_date, else most recent Final
-target_et = hkt_to_et_date(pick_date.isoformat())
-scheduled_after = games[(games["status"] == "Scheduled") & (games["game_date"] >= target_et)]
-if not scheduled_after.empty:
-    default_idx = games.index.get_loc(scheduled_after.index[0])
-else:
-    final_games = games[games["status"] == "Final"]
-    default_idx = (games.index.get_loc(final_games.index[-1]) if not final_games.empty else 0)
+day_games = day_games.assign(label=day_games.apply(_game_label, axis=1))
 
-chosen_label = st.selectbox("Pick a game", games["label"].tolist(), index=default_idx)
-g = games[games["label"] == chosen_label].iloc[0]
+with gcol:
+    chosen_game_label = st.selectbox("Game", day_games["label"].tolist(), index=0)
+
+g = day_games[day_games["label"] == chosen_game_label].iloc[0]
 
 window = window_picker(default="L10")
 
 home_id, away_id = int(g["home_team_id"]), int(g["away_team_id"])
 home, away = tlookup[home_id], tlookup[away_id]
 is_upcoming = g["status"] != "Final"
+
 
 # =========================================================================
 # Compact header strip
