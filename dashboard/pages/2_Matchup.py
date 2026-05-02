@@ -20,6 +20,7 @@ from lib.data import (
     games_in_window,
     head_to_head,
     last_starting_lineup,
+    team_minutes_forecast,
     league_team_table,
     team_aggregate,
     team_lookup,
@@ -585,28 +586,106 @@ st.caption("🟢 = team has edge over league avg · 🔴 = below league avg · b
 st.divider()
 
 # =========================================================================
-# Likely starters
+# Minutes Forecast — full roster L5 minutes + plus/minus + injury flags
 # =========================================================================
-st.subheader("👥 Likely starters (last game)")
+st.subheader("⏱️ Minutes Forecast")
+st.caption(
+    "L5 average minutes + plus/minus per player who appeared in the last game. "
+    "🔴 OUT · 🟠 Doubtful · 🟡 Questionable · ⬆️ likely to absorb minutes from the missing players."
+)
 
-def _starters_block(team_id: int, team_name: str):
-    df = last_starting_lineup(team_id, _mtime=mtime)
+def _format_minutes(v: float | None) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return f"{v:.1f}"
+
+def _format_pm(v: float | None) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return f"{v:+.1f}"
+
+def _status_emoji(row) -> str:
+    if row["is_out"]:
+        return "🔴"
+    if row["is_doubtful"]:
+        return "🟠"
+    if row["is_questionable"]:
+        return "🟡"
+    if row.get("will_absorb"):
+        return "⬆️"
+    return ""
+
+def _minutes_forecast_block(team_id: int, team_name: str, team_abbr: str):
+    df = team_minutes_forecast(team_id, _mtime=mtime)
     st.markdown(f"#### {team_name}")
     if df.empty:
-        st.caption("No recent starters found.")
+        st.caption("No recent player data found.")
         return
-    df = df.copy()
-    df["minutes"] = df["minutes"].apply(fmt_num)
-    df = df.rename(columns={"player": "Player", "minutes": "MIN",
-                              "pts": "PTS", "reb": "REB", "ast": "AST"})
-    st.dataframe(df, hide_index=True, width="stretch")
+
+    # Build a display frame
+    rows = []
+    for _, r in df.iterrows():
+        emoji = _status_emoji(r)
+        starter_mark = "★" if r["is_starter_last"] else ""
+        rows.append({
+            "": emoji,
+            "Player": f"{starter_mark} {r['player_name']}".strip(),
+            "L5 MIN": _format_minutes(r["l5_min"]),
+            "L5 +/−": _format_pm(r["l5_pm"]),
+            "L5 GP": int(r["l5_gp"]) if pd.notna(r["l5_gp"]) else 0,
+            "Last MIN": _format_minutes(r["last_min"]),
+            "Status": r["injury_status"] or "",
+        })
+    display_df = pd.DataFrame(rows)
+
+    # Color rows: red bg for OUT, orange for Doubtful, green for will_absorb
+    def _row_style(row: pd.Series) -> list[str]:
+        styles = [""] * len(row)
+        idx_in_orig = row.name
+        orig_row = df.iloc[idx_in_orig]
+        if orig_row["is_out"]:
+            return ["background-color: rgba(200,70,70,0.18); color: #E37070;"] * len(row)
+        if orig_row["is_doubtful"]:
+            return ["background-color: rgba(244,167,66,0.18); color: #F4A742;"] * len(row)
+        if orig_row.get("will_absorb"):
+            return ["background-color: rgba(62,168,102,0.15); color: #5FBE85;"] * len(row)
+        return styles
+
+    styler = display_df.style.apply(_row_style, axis=1)
+    st.dataframe(
+        styler,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "": st.column_config.TextColumn("", width=30),
+            "Player": st.column_config.TextColumn("Player", width=180),
+            "L5 MIN": st.column_config.TextColumn("L5 MIN"),
+            "L5 +/−": st.column_config.TextColumn("L5 +/−"),
+            "L5 GP": st.column_config.NumberColumn("GP", format="%d"),
+            "Last MIN": st.column_config.TextColumn("Last MIN"),
+            "Status": st.column_config.TextColumn("Status"),
+        },
+    )
+
+    # Surface a quick text summary if there are missing minutes
+    significant_missing = df[
+        ((df["is_out"] | df["is_doubtful"])) & (df["l5_min"].fillna(0) > 15)
+    ]
+    if not significant_missing.empty:
+        names = ", ".join(significant_missing["player_name"].tolist())
+        missing_mins = significant_missing["l5_min"].sum()
+        st.caption(
+            f"⚠️ Missing **{missing_mins:.0f} L5 minutes** ({names}). "
+            "Marked players (⬆️) are likely to absorb."
+        )
 
 scols = st.columns(2)
-with scols[0]: _starters_block(away_id, away["full_name"])
-with scols[1]: _starters_block(home_id, home["full_name"])
+with scols[0]:
+    _minutes_forecast_block(away_id, away["full_name"], away["abbreviation"])
+with scols[1]:
+    _minutes_forecast_block(home_id, home["full_name"], home["abbreviation"])
 
-st.caption("Starters shown are from the team's most recent completed game — "
-           "actual starters tonight may vary based on injuries / coach decisions.")
+st.caption("★ = started in last game. Forecast uses L5 average — actual rotation tonight may differ.")
 
 # =========================================================================
 # H2H — collapsed by default

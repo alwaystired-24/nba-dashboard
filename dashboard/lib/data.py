@@ -922,6 +922,131 @@ def last_starting_lineup(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
         )
 
 
+@st.cache_data(show_spinner=False)
+def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
+    """L5 minutes forecast + L5 plus/minus + injury redistribution flag.
+
+    Returns one row per player who appeared in the team's last game.
+    Columns:
+        player_id, player_name, last_min, l5_min, l5_pm, l5_gp,
+        is_starter_last, is_out, is_doubtful, will_absorb
+
+    will_absorb: True if this player is in the top 3 minutes-eaters AND
+        someone with significant L5 minutes (>15) is OUT/DOUBTFUL on the team.
+    """
+    with _connect() as conn:
+        # Latest game for the team
+        latest = conn.execute(
+            """
+            SELECT g.game_id FROM games g
+            WHERE g.status = 'Final' AND (g.home_team_id = ? OR g.away_team_id = ?)
+            ORDER BY g.game_date DESC LIMIT 1
+            """,
+            (team_id, team_id),
+        ).fetchone()
+        if not latest:
+            return pd.DataFrame()
+
+        last_game_id = latest["game_id"]
+
+        # Step 1: players who appeared in the last game (and their stats from that game)
+        last_game_players = pd.read_sql_query(
+            """
+            SELECT pbt.player_id, p.full_name AS player_name,
+                   pbt.minutes AS last_min, pbt.is_starter AS is_starter_last
+            FROM player_box_traditional pbt
+            JOIN players p ON p.player_id = pbt.player_id
+            WHERE pbt.game_id = ? AND pbt.team_id = ?
+            ORDER BY pbt.minutes DESC
+            """,
+            conn, params=(last_game_id, team_id),
+        )
+        if last_game_players.empty:
+            return pd.DataFrame()
+
+        # Step 2: for each player, compute L5 averages
+        # Get the last 5 game_ids for this team
+        recent_games = pd.read_sql_query(
+            """
+            SELECT g.game_id FROM games g
+            WHERE g.status = 'Final' AND (g.home_team_id = ? OR g.away_team_id = ?)
+            ORDER BY g.game_date DESC LIMIT 5
+            """,
+            conn, params=(team_id, team_id),
+        )
+        if recent_games.empty:
+            return pd.DataFrame()
+        recent_ids = recent_games["game_id"].tolist()
+        placeholders = ",".join("?" * len(recent_ids))
+
+        l5_stats = pd.read_sql_query(
+            f"""
+            SELECT pbt.player_id,
+                   AVG(pbt.minutes) AS l5_min,
+                   AVG(pbt.plus_minus) AS l5_pm,
+                   COUNT(*) AS l5_gp
+            FROM player_box_traditional pbt
+            WHERE pbt.team_id = ? AND pbt.game_id IN ({placeholders})
+              AND pbt.minutes IS NOT NULL
+            GROUP BY pbt.player_id
+            """,
+            conn, params=[team_id] + recent_ids,
+        )
+
+    # Merge: last game players (left), L5 stats (right)
+    df = last_game_players.merge(l5_stats, on="player_id", how="left")
+
+    # Step 3: tag injuries
+    inj_df = team_injuries(team_id, _mtime=_mtime)
+    if not inj_df.empty:
+        # Build a name -> status map (case-insensitive contains for robustness)
+        inj_map = {}
+        for _, row in inj_df.iterrows():
+            inj_map[row["player_name"].lower()] = row["status"]
+
+        def _injury_for(name: str) -> str | None:
+            return inj_map.get(name.lower())
+
+        df["injury_status"] = df["player_name"].apply(_injury_for)
+        df["is_out"] = df["injury_status"].fillna("").str.lower().str.contains(
+            "out|suspended", regex=True
+        )
+        df["is_doubtful"] = df["injury_status"].fillna("").str.lower().str.contains(
+            "doubtful", regex=True
+        )
+        df["is_questionable"] = df["injury_status"].fillna("").str.lower().str.contains(
+            "questionable", regex=True
+        )
+    else:
+        df["injury_status"] = None
+        df["is_out"] = False
+        df["is_doubtful"] = False
+        df["is_questionable"] = False
+
+    # Step 4: minutes redistribution flag
+    # If any player with L5 min > 15 is OUT or DOUBTFUL, flag the top 3
+    # available rotation players (by L5 min) as likely to absorb minutes.
+    significant_missing = df[
+        ((df["is_out"] | df["is_doubtful"])) & (df["l5_min"].fillna(0) > 15)
+    ]
+    df["will_absorb"] = False
+    if not significant_missing.empty:
+        # Top 3 available players (not out, not doubtful) by L5 min
+        available = df[~df["is_out"] & ~df["is_doubtful"]].sort_values(
+            "l5_min", ascending=False
+        )
+        if not available.empty:
+            top3_ids = set(available.head(3)["player_id"].tolist())
+            df.loc[df["player_id"].isin(top3_ids), "will_absorb"] = True
+
+    # Sort by L5 min desc (most-played first), put OUT/DOUBTFUL at bottom
+    df["sort_key"] = df["l5_min"].fillna(0)
+    df.loc[df["is_out"], "sort_key"] = -1
+    df.loc[df["is_doubtful"], "sort_key"] = -0.5
+    df = df.sort_values("sort_key", ascending=False).drop(columns=["sort_key"])
+    return df.reset_index(drop=True)
+
+
 # =========================================================================
 # ODDS QUERIES (Phase 6)
 # =========================================================================
