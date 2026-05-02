@@ -658,6 +658,182 @@ def team_news(team_id: int, limit: int = 5, _mtime: float = 0.0) -> pd.DataFrame
         return pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False)
+def league_news(limit: int = 10, _mtime: float = 0.0) -> pd.DataFrame:
+    """Latest news headlines across all teams. Used for Today landing."""
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            return pd.read_sql_query(
+                """
+                SELECT n.headline, n.summary, n.category, n.published_utc, n.url,
+                       n.team_id, t.abbreviation AS team_abbr
+                FROM team_news n
+                JOIN teams t ON t.team_id = n.team_id
+                ORDER BY n.published_utc DESC
+                LIMIT ?
+                """,
+                conn, params=(limit,),
+            )
+    except sqlite3.OperationalError:
+        return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def league_injuries_top(limit: int = 10, _mtime: float = 0.0) -> pd.DataFrame:
+    """League-wide injury watch — Out and Doubtful, top N by status severity.
+
+    Used for the "League injury watch" panel on Today landing.
+    """
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            return pd.read_sql_query(
+                """
+                SELECT i.player_name, i.status, i.detail, i.team_id,
+                       t.abbreviation AS team_abbr
+                FROM injuries i
+                JOIN teams t ON t.team_id = i.team_id
+                WHERE i.status IN ('Out', 'Out For Season', 'Doubtful', 'Suspended', 'Questionable')
+                ORDER BY
+                    CASE i.status
+                        WHEN 'Out' THEN 1
+                        WHEN 'Out For Season' THEN 1
+                        WHEN 'Suspended' THEN 1
+                        WHEN 'Doubtful' THEN 2
+                        WHEN 'Questionable' THEN 3
+                        ELSE 4
+                    END,
+                    i.player_name
+                LIMIT ?
+                """,
+                conn, params=(limit,),
+            )
+    except sqlite3.OperationalError:
+        return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def conference_standings(conference: str, season_filter: str = "reg",
+                          _mtime: float = 0.0) -> pd.DataFrame:
+    """Return teams in a conference ranked by season win pct.
+
+    Args:
+        conference: 'East' or 'West'
+        season_filter: 'reg', 'po', or 'both'
+
+    Returns DataFrame with: rank, team_id, abbreviation, full_name, w, l, win_pct
+    """
+    rows = []
+    for tm in teams(_mtime).itertuples(index=False):
+        if str(getattr(tm, "conference", "") or "").lower() != conference.lower():
+            continue
+        w, l = team_record(int(tm.team_id), "Season", season_filter, _mtime=_mtime)
+        win_pct = w / (w + l) if (w + l) > 0 else 0.0
+        rows.append({
+            "team_id": int(tm.team_id),
+            "abbreviation": tm.abbreviation,
+            "full_name": tm.full_name,
+            "w": w,
+            "l": l,
+            "win_pct": win_pct,
+        })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df = df.sort_values("win_pct", ascending=False).reset_index(drop=True)
+    df.insert(0, "rank", range(1, len(df) + 1))
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def stat_leaders(stat: str, season_filter: str = "reg",
+                  min_games: int = 5, top_n: int = 5,
+                  _mtime: float = 0.0) -> pd.DataFrame:
+    """Top N players for a stat over the current season.
+
+    Args:
+        stat: column name in player_box_traditional, e.g. 'pts', 'ast', 'reb',
+              'stl', 'blk', 'fg_pct', 'fg3_pct'
+        season_filter: 'reg', 'po', or 'both'
+        min_games: minimum games played to qualify
+        top_n: how many players to return
+
+    Returns DataFrame: player_id, player_name, team_id, team_abbr, gp, value
+    """
+    season_clause = _season_filter_clause(season_filter)
+
+    # For percentage stats, average; for counting stats, average too
+    # (basketball ref reports per-game averages)
+    sql = f"""
+        SELECT pbt.player_id,
+               p.full_name AS player_name,
+               pbt.team_id,
+               t.abbreviation AS team_abbr,
+               COUNT(*) AS gp,
+               AVG(pbt.{stat}) AS value
+        FROM player_box_traditional pbt
+        JOIN games g ON g.game_id = pbt.game_id AND g.status = 'Final'
+        JOIN players p ON p.player_id = pbt.player_id
+        JOIN teams t ON t.team_id = pbt.team_id
+        WHERE pbt.minutes IS NOT NULL AND pbt.minutes > 0 {season_clause}
+        GROUP BY pbt.player_id, pbt.team_id
+        HAVING COUNT(*) >= ?
+        ORDER BY value DESC
+        LIMIT ?
+    """
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            return pd.read_sql_query(sql, conn, params=(min_games, top_n))
+    except sqlite3.OperationalError:
+        return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def closing_line_for_game(game_id: str, _mtime: float = 0.0) -> dict:
+    """Return the most-recent (closest-to-tip) odds snapshot for a game.
+
+    Returns dict with: spread (str), total (str), or empty dict if no odds.
+    """
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            # Take the latest snapshot per market for this game, prefer DraftKings
+            row = conn.execute(
+                """
+                SELECT market, point, name, price, home_team, away_team
+                FROM odds_snapshots
+                WHERE game_id = ?
+                ORDER BY snapshot_utc DESC
+                """,
+                (game_id,),
+            ).fetchall()
+            if not row:
+                return {}
+            # Group by market, take first (= most recent)
+            spread_pt = None
+            total_pt = None
+            for r in row:
+                if r["market"] == "spreads" and spread_pt is None:
+                    # Pick the home team's spread
+                    if r["name"] == r["home_team"]:
+                        spread_pt = r["point"]
+                elif r["market"] == "totals" and total_pt is None:
+                    total_pt = r["point"]
+                if spread_pt is not None and total_pt is not None:
+                    break
+            out = {}
+            if spread_pt is not None:
+                # Format e.g. -5.5 or +3
+                out["spread"] = f"{spread_pt:+.1f}"
+            if total_pt is not None:
+                out["total"] = f"{total_pt:.1f}"
+            return out
+    except sqlite3.OperationalError:
+        return {}
+
+
 # =========================================================================
 # REST DAYS — days since the team's last game
 # =========================================================================

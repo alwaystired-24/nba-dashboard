@@ -444,12 +444,19 @@ for team_id, team_obj, side_emoji in [
 st.divider()
 
 # =========================================================================
-# Trend charts — both teams' L20
+# Trend charts — both teams, respecting selected window
 # =========================================================================
-st.subheader("📈 Last 20 games — trend")
+from lib.data import WINDOW_TO_LAST_N
+
+# For 'Season' window, cap to 30 games to keep the chart readable
+_trend_n = WINDOW_TO_LAST_N.get(window) or 30
+
+st.subheader(f"📈 Trend — {window} ({_trend_n} games)")
 
 def _trend(team_id: int, team_name: str, color: str):
-    df = team_recent_games(team_id, last_n=20, season_filter=season_filter, _mtime=mtime).sort_values("game_date")
+    df = team_recent_games(team_id, last_n=_trend_n,
+                            season_filter=season_filter,
+                            _mtime=mtime).sort_values("game_date")
     if df.empty:
         st.caption(f"No data for {team_name}")
         return
@@ -507,6 +514,7 @@ edge_rows = [
 ]
 
 table_rows = []
+edge_meta = []  # parallel list: (away_off_diff_norm, home_off_diff_norm) for coloring
 for metric, ao, hd, ho, ad, lavg, fmtfn in edge_rows:
     table_rows.append({
         "Metric": metric,
@@ -516,7 +524,63 @@ for metric, ao, hd, ho, ad, lavg, fmtfn in edge_rows:
         f"{away['abbreviation']} D allowed": fmtfn(ad) if ad is not None else "—",
         "League avg": fmtfn(lavg) if lavg is not None else "—",
     })
-st.dataframe(pd.DataFrame(table_rows), hide_index=True, width="stretch")
+    # Compute edge size for coloring: deviation from league avg in both directions
+    edge_meta.append({
+        "ao": ao, "hd": hd, "ho": ho, "ad": ad, "lavg": lavg,
+    })
+
+edge_df = pd.DataFrame(table_rows)
+
+
+# Color cells based on size of deviation from league avg
+def _edge_style(row: pd.Series) -> list[str]:
+    """Color row based on how far each cell's value is from league avg."""
+    styles = [""] * len(row)
+    meta = edge_meta[row.name]  # row.name is the index
+    lavg = meta["lavg"]
+    if lavg is None or pd.isna(lavg):
+        return styles
+
+    # Map column index by name
+    col_keys = {
+        f"{away['abbreviation']} OFF": ("ao", False),  # higher is better (offense)
+        f"{home['abbreviation']} D allowed": ("hd", True),   # lower is better (defense)
+        f"{home['abbreviation']} OFF": ("ho", False),
+        f"{away['abbreviation']} D allowed": ("ad", True),
+    }
+    # Pace and Fouls have no clear good/bad direction — neutralize
+    is_neutral_metric = row["Metric"] in ("Pace", "Fouls drawn")
+
+    for col_name, (key, lower_better) in col_keys.items():
+        if col_name not in row.index:
+            continue
+        val = meta.get(key)
+        if val is None or pd.isna(val):
+            continue
+        diff = val - lavg
+        if lower_better:
+            diff = -diff
+        # Threshold the deviation: ratio metrics use 0.02 (=2pp), absolute use ~3 units
+        # Auto-detect: if league avg < 1.5, treat as ratio
+        threshold_big = 0.025 if abs(lavg) < 1.5 else 3.0
+        threshold_small = 0.012 if abs(lavg) < 1.5 else 1.5
+
+        col_idx = row.index.get_loc(col_name)
+        if is_neutral_metric:
+            continue
+        if diff > threshold_big:
+            styles[col_idx] = "background-color: rgba(62,168,102,0.30); color: #0E1525; font-weight: 600;"
+        elif diff > threshold_small:
+            styles[col_idx] = "background-color: rgba(62,168,102,0.18); color: #5FBE85; font-weight: 600;"
+        elif diff < -threshold_big:
+            styles[col_idx] = "background-color: rgba(200,70,70,0.30); color: #0E1525; font-weight: 600;"
+        elif diff < -threshold_small:
+            styles[col_idx] = "background-color: rgba(200,70,70,0.18); color: #E37070; font-weight: 600;"
+    return styles
+
+styler = edge_df.style.apply(_edge_style, axis=1)
+st.dataframe(styler, hide_index=True, width="stretch")
+st.caption("🟢 = team has edge over league avg · 🔴 = below league avg · brighter = bigger edge")
 
 st.divider()
 

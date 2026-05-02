@@ -3,8 +3,8 @@ name: ESPN Update
 on:
   workflow_dispatch:
   schedule:
-    # Every 4 hours, all UTC. Catches morning/midday/evening status updates.
-    - cron: '0 */4 * * *'
+    # Every hour, all UTC. Catches morning/midday/evening status updates.
+    - cron: '0 * * * *'
 
 jobs:
   fetch:

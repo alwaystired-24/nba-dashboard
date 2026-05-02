@@ -68,7 +68,10 @@ def text_for_rank(rank: float, n_total: int = 30) -> str:
 
 
 def style_dataframe_by_ranks(df: pd.DataFrame, rank_columns: dict[str, str],
-                              n_total: int = 30) -> "pd.io.formats.style.Styler":
+                              n_total: int = 30,
+                              league_avg_row_name: str | None = "League avg",
+                              league_avg_col: str = "team",
+                              ) -> "pd.io.formats.style.Styler":
     """Color each value cell by its sibling rank column.
 
     Args:
@@ -77,11 +80,26 @@ def style_dataframe_by_ranks(df: pd.DataFrame, rank_columns: dict[str, str],
                       e.g., {"pts": "pts_rank", "off_rating": "off_rating_rank"}
         n_total: total population size (e.g., 30 for teams, total player count
                  for players).
+        league_avg_row_name: if df[league_avg_col] equals this, the row gets
+                             a distinct neutral background instead of rank colors.
+        league_avg_col: which column to check for the league avg row name.
 
     Returns a Styler. Just pass to st.dataframe.
     """
     def color_row(row: pd.Series) -> list[str]:
         styles = [""] * len(row)
+        # Detect League avg row — give it a distinct amber accent across ALL cells
+        is_league_avg = (
+            league_avg_row_name is not None
+            and league_avg_col in row.index
+            and str(row[league_avg_col]) == league_avg_row_name
+        )
+        if is_league_avg:
+            return [
+                "background-color: rgba(244,167,66,0.12); color: #F4A742; "
+                "font-weight: 600; border-top: 1px solid rgba(244,167,66,0.4);"
+            ] * len(row)
+
         for value_col, rank_col in rank_columns.items():
             if value_col not in row.index or rank_col not in row.index:
                 continue
