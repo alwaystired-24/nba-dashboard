@@ -134,3 +134,90 @@ def style_dataframe_by_percentiles(df: pd.DataFrame,
         return styles
 
     return df.style.apply(color_row, axis=1)
+
+
+# =========================================================================
+# METRIC CARD HTML HELPERS
+# =========================================================================
+
+def _bg_for_rank(rank: int | float | None, n_total: int = 30,
+                  is_neutral_metric: bool = False) -> tuple[str, str, str]:
+    """Return (bg_rgba, border_rgba, delta_color) for a rank.
+
+    Bands (4-tier):
+        1 to ~20% of n  -> bright green
+        ~20% to ~45%    -> soft green
+        ~45% to ~55%    -> neutral
+        ~55% to ~80%    -> soft red
+        ~80% to n       -> bright red
+    is_neutral_metric=True forces the neutral color (used for Pace which doesn't
+    have a "good" or "bad" direction).
+    """
+    if rank is None or n_total < 2:
+        return ("#172033", "#25304a", "#8B95A8")
+    try:
+        rank = float(rank)
+    except (TypeError, ValueError):
+        return ("#172033", "#25304a", "#8B95A8")
+
+    if is_neutral_metric:
+        return ("#172033", "#25304a", "#8B95A8")
+
+    # Position 0 (best) to 1 (worst)
+    pos = (rank - 1) / (n_total - 1)
+    pos = max(0.0, min(1.0, pos))
+
+    if pos <= 0.20:
+        return ("rgba(62,168,102,0.30)", "rgba(62,168,102,0.55)", "#5FBE85")
+    if pos <= 0.45:
+        return ("rgba(62,168,102,0.18)", "rgba(62,168,102,0.40)", "#5FBE85")
+    if pos <= 0.55:
+        return ("#172033", "#25304a", "#8B95A8")
+    if pos <= 0.80:
+        return ("rgba(200,70,70,0.18)", "rgba(200,70,70,0.40)", "#E37070")
+    return ("rgba(200,70,70,0.30)", "rgba(200,70,70,0.55)", "#E37070")
+
+
+def metric_card_html(label: str, value: str, delta: str | None,
+                       rank: int | None, n_total: int = 30,
+                       is_neutral_metric: bool = False) -> str:
+    """Generate HTML for a single metric card.
+
+    Args:
+        label: e.g. "ORtg"
+        value: pre-formatted value as str, e.g. "119.8" or "55.1"
+        delta: pre-formatted delta str including sign, e.g. "+4.2" or "+1.4pp", or None
+        rank: 1..n_total, or None to disable color
+        n_total: usually 30 (teams)
+        is_neutral_metric: True for Pace etc. which have no "good" direction
+    """
+    bg, border, delta_color = _bg_for_rank(rank, n_total, is_neutral_metric)
+    delta_html = ""
+    if delta is not None and rank is not None:
+        rank_str = f" · #{int(rank)}"
+        delta_html = (
+            f'<div style="font-size:10px;color:{delta_color};font-weight:500;'
+            f'margin-top:2px;">{delta}{rank_str}</div>'
+        )
+    elif rank is not None:
+        delta_html = (
+            f'<div style="font-size:10px;color:{delta_color};font-weight:500;'
+            f'margin-top:2px;">#{int(rank)}</div>'
+        )
+    return (
+        f'<div style="background:{bg};border:1px solid {border};'
+        f'border-radius:8px;padding:9px 10px;">'
+        f'<div style="font-size:10px;color:#8B95A8;margin-bottom:2px;">{label}</div>'
+        f'<div style="font-size:18px;color:#E5E9F0;font-weight:500;line-height:1.1;">{value}</div>'
+        f'{delta_html}'
+        f'</div>'
+    )
+
+
+def metric_cards_grid_html(cards_html: list[str], cols: int = 4) -> str:
+    """Wrap a list of card HTML strings into a grid."""
+    cards_str = "".join(cards_html)
+    return (
+        f'<div style="display:grid;grid-template-columns:repeat({cols},1fr);'
+        f'gap:8px;margin-bottom:1rem;">{cards_str}</div>'
+    )

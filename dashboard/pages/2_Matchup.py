@@ -156,89 +156,187 @@ def _rest_label(team_id: int, game_date: str) -> str:
         return f"Rest: 🟢 {rd} days"
     return f"Rest: {rd} days"
 
-hdr = st.container(border=True)
-with hdr:
-    cols = st.columns([3, 2, 3])
-    with cols[0]:
-        wA, lA = team_record(away_id, "Season", season_filter, _mtime=mtime)
-        wA_w, lA_w = team_record(away_id, window, season_filter, _mtime=mtime)
-        st.markdown(f"### ✈️ {away['full_name']}")
-        st.markdown(f"Season `{wA}-{lA}`  ·  {window} `{wA_w}-{lA_w}`")
-        st.caption(_rest_label(away_id, g["game_date"]))
-    with cols[1]:
-        st.markdown(f"<div style='text-align:center'>"
-                     f"<h4>{g['game_date']} · {g['season_type']}</h4>"
-                     f"<p>{status_badge(g['status'])}</p>"
-                     "</div>", unsafe_allow_html=True)
-        if g["status"] == "Final" and pd.notna(g["away_score"]):
-            st.markdown(
-                f"<h2 style='text-align:center;margin:0'>"
-                f"{int(g['away_score'])} – {int(g['home_score'])}</h2>",
-                unsafe_allow_html=True,
-            )
-    with cols[2]:
-        wH, lH = team_record(home_id, "Season", season_filter, _mtime=mtime)
-        wH_w, lH_w = team_record(home_id, window, season_filter, _mtime=mtime)
-        st.markdown(f"### 🏠 {home['full_name']}")
-        st.markdown(f"Season `{wH}-{lH}`  ·  {window} `{wH_w}-{lH_w}`")
-        st.caption(_rest_label(home_id, g["game_date"]))
+
+def _record_pill(w: int, l: int, label: str) -> str:
+    """Color a record pill based on win pct."""
+    if w + l == 0:
+        bg, color = "#25304a", "#8B95A8"
+    else:
+        win_pct = w / (w + l)
+        if win_pct >= 0.55:
+            bg, color = "rgba(62,168,102,0.18)", "#5FBE85"
+        elif win_pct <= 0.45:
+            bg, color = "rgba(200,70,70,0.18)", "#E37070"
+        else:
+            bg, color = "#25304a", "#E5E9F0"
+    return (
+        f'<span style="padding:2px 7px;background:{bg};color:{color};'
+        f'border-radius:4px;font-size:11px;">{label} {w}-{l}</span>'
+    )
+
+
+# Big-logo header card with team logos
+from lib.branding import team_logo_url
+
+wA, lA = team_record(away_id, "Season", season_filter, _mtime=mtime)
+wA_w, lA_w = team_record(away_id, window, season_filter, _mtime=mtime)
+wH, lH = team_record(home_id, "Season", season_filter, _mtime=mtime)
+wH_w, lH_w = team_record(home_id, window, season_filter, _mtime=mtime)
+
+away_logo = team_logo_url(away_id, size=500)
+home_logo = team_logo_url(home_id, size=500)
+
+# Center column content depends on game state
+if g["status"] == "Final" and pd.notna(g["away_score"]):
+    center_top = f'<div style="font-size:11px;color:#8B95A8;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px;">{g["season_type"]} · {g["game_date"]}</div>'
+    center_main = f'<div style="font-size:32px;color:#E5E9F0;font-weight:500;letter-spacing:0.02em;">{int(g["away_score"])} – {int(g["home_score"])}</div>'
+    center_sub = '<div style="font-size:11px;color:#8B95A8;margin-top:4px;">🏁 Final</div>'
+else:
+    center_top = f'<div style="font-size:11px;color:#8B95A8;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:6px;">{g["season_type"]} · {g["game_date"]}</div>'
+    center_main = '<div style="font-size:18px;color:#F4A742;font-weight:500;letter-spacing:0.05em;">VS</div>'
+    center_sub = '<div style="font-size:11px;color:#8B95A8;margin-top:4px;">Upcoming</div>'
+
+away_rest = _rest_label(away_id, g["game_date"])
+home_rest = _rest_label(home_id, g["game_date"])
+
+header_html = f'''
+<div style="background:#172033;border-radius:12px;padding:18px 20px;margin-bottom:1rem;">
+  <div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:20px;">
+    <div style="text-align:center;">
+      <img src="{away_logo}" style="width:72px;height:72px;margin-bottom:8px;" alt="{away["abbreviation"]}">
+      <div style="font-size:18px;color:#E5E9F0;font-weight:500;margin-bottom:6px;">✈️ {away["full_name"]}</div>
+      <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;">
+        {_record_pill(wA, lA, "Season")}
+        {_record_pill(wA_w, lA_w, window)}
+      </div>
+      <div style="font-size:11px;color:#8B95A8;margin-top:8px;">{away_rest}</div>
+    </div>
+    <div style="text-align:center;min-width:120px;">
+      {center_top}
+      {center_main}
+      {center_sub}
+    </div>
+    <div style="text-align:center;">
+      <img src="{home_logo}" style="width:72px;height:72px;margin-bottom:8px;" alt="{home["abbreviation"]}">
+      <div style="font-size:18px;color:#E5E9F0;font-weight:500;margin-bottom:6px;">🏠 {home["full_name"]}</div>
+      <div style="display:flex;gap:6px;justify-content:center;flex-wrap:wrap;">
+        {_record_pill(wH, lH, "Season")}
+        {_record_pill(wH_w, lH_w, window)}
+      </div>
+      <div style="font-size:11px;color:#8B95A8;margin-top:8px;">{home_rest}</div>
+    </div>
+  </div>
+</div>
+'''
+st.markdown(header_html, unsafe_allow_html=True)
 
 # =========================================================================
 # Injuries + news panel (Phase 7)
 # =========================================================================
 
-def _injury_status_emoji(status: str) -> str:
+def _injury_status_color(status: str) -> tuple[str, str]:
+    """Return (bg, color) for an injury status pill."""
     s = (status or "").lower()
     if "out" in s or "suspended" in s:
-        return "🔴"
+        return ("rgba(200,70,70,0.18)", "#E37070")
     if "doubtful" in s:
-        return "🟠"
-    if "questionable" in s:
-        return "🟡"
-    if "day-to-day" in s:
-        return "🟢"
+        return ("rgba(244,167,66,0.20)", "#F4A742")
+    if "questionable" in s or "day-to-day" in s:
+        return ("rgba(244,167,66,0.15)", "#F4A742")
     if "probable" in s:
-        return "🟢"
-    return "⚪"
+        return ("rgba(62,168,102,0.18)", "#5FBE85")
+    return ("#25304a", "#8B95A8")
 
-def _render_team_injuries_news(team_id: int, team_label: str):
+
+def _injury_news_card_html(team_id: int, team_label: str) -> str:
     inj = team_injuries(team_id, _mtime=mtime)
-    news = team_news(team_id, limit=5, _mtime=mtime)
-    st.markdown(f"#### {team_label}")
+    news = team_news(team_id, limit=3, _mtime=mtime)
+    logo = team_logo_url(team_id, size=500)
 
+    # Header: logo + name + status pill
+    out_count = 0 if inj.empty else int(
+        inj["status"].str.lower().str.contains("out|suspended|doubtful").sum()
+    )
+    if out_count == 0:
+        head_pill_bg = "rgba(62,168,102,0.18)"
+        head_pill_color = "#5FBE85"
+        head_pill_label = "All clear"
+    else:
+        head_pill_bg = "rgba(200,70,70,0.18)"
+        head_pill_color = "#E37070"
+        head_pill_label = f"{out_count} out"
+
+    head_html = (
+        f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">'
+        f'<img src="{logo}" style="width:22px;height:22px;" alt="">'
+        f'<span style="font-size:13px;color:#E5E9F0;font-weight:500;">{team_label}</span>'
+        f'<span style="font-size:11px;padding:1px 6px;border-radius:4px;'
+        f'background:{head_pill_bg};color:{head_pill_color};margin-left:auto;">{head_pill_label}</span>'
+        f'</div>'
+    )
+
+    # Injury rows
     if inj.empty:
-        st.caption("✅ No injuries reported")
+        body_html = '<div style="font-size:12px;color:#8B95A8;padding:4px 0;">No injuries reported</div>'
     else:
-        # Compact 1-liners — emoji + name + status + detail
+        rows = []
         for _, row in inj.iterrows():
-            emoji = _injury_status_emoji(row["status"])
-            detail_part = f" · _{row['detail']}_" if row["detail"] else ""
-            st.markdown(
-                f"{emoji} **{row['player_name']}** — `{row['status']}`{detail_part}"
+            bg, color = _injury_status_color(row["status"])
+            detail = (row["detail"] or "")[:60]
+            if len(row["detail"] or "") > 60:
+                detail += "…"
+            rows.append(
+                f'<div style="font-size:12px;color:#E5E9F0;padding:4px 0;'
+                f'display:flex;justify-content:space-between;gap:8px;">'
+                f'<span>{row["player_name"]}</span>'
+                f'<span style="color:{color};white-space:nowrap;">{row["status"]}</span>'
+                f'</div>'
             )
+            if detail:
+                rows.append(
+                    f'<div style="font-size:11px;color:#8B95A8;padding:0 0 6px;line-height:1.4;">{detail}</div>'
+                )
+        body_html = "".join(rows)
 
-    if news.empty:
-        st.caption("📰 _No recent news_")
-    else:
-        with st.expander(f"📰 Recent news ({len(news)})", expanded=False):
-            for _, art in news.iterrows():
-                cat = f"`{art['category']}` " if art["category"] else ""
-                date_str = (art["published_utc"] or "")[:10]
-                if art["url"]:
-                    st.markdown(f"{cat}**[{art['headline']}]({art['url']})** _({date_str})_")
-                else:
-                    st.markdown(f"{cat}**{art['headline']}** _({date_str})_")
-                if art["summary"]:
-                    st.caption(art["summary"])
+    # News rows (top 3)
+    news_html = ""
+    if not news.empty:
+        items = []
+        for _, art in news.iterrows():
+            cat_str = f'<span style="font-size:10px;color:#F4A742;margin-right:6px;">{art["category"]}</span>' if art["category"] else ""
+            url = art["url"] or "#"
+            items.append(
+                f'<div style="font-size:11px;color:#E5E9F0;padding:4px 0;line-height:1.4;">'
+                f'{cat_str}<a href="{url}" target="_blank" style="color:#E5E9F0;text-decoration:none;">{art["headline"]}</a>'
+                f'</div>'
+            )
+        news_html = (
+            f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid #25304a;">'
+            f'<div style="font-size:10px;color:#8B95A8;letter-spacing:0.05em;text-transform:uppercase;'
+            f'margin-bottom:4px;">📰 Recent news</div>'
+            f'{"".join(items)}'
+            f'</div>'
+        )
 
-with st.container(border=True):
-    st.markdown("### 🚨 Injuries & News")
-    inj_cols = st.columns(2)
-    with inj_cols[0]:
-        _render_team_injuries_news(away_id, f"✈️ {away['full_name']}")
-    with inj_cols[1]:
-        _render_team_injuries_news(home_id, f"🏠 {home['full_name']}")
-    st.caption("Injuries refreshed every 4h via GitHub Actions · sourced from ESPN")
+    return (
+        f'<div style="background:#172033;border-radius:12px;padding:12px 16px;">'
+        f'{head_html}{body_html}{news_html}'
+        f'</div>'
+    )
+
+
+# Render injury+news cards
+st.markdown(
+    '<p style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;'
+    'color:#8B95A8;margin:1.25rem 0 10px;">Injuries & news</p>',
+    unsafe_allow_html=True,
+)
+inj_cols = st.columns(2)
+with inj_cols[0]:
+    st.markdown(_injury_news_card_html(away_id, away["full_name"]), unsafe_allow_html=True)
+with inj_cols[1]:
+    st.markdown(_injury_news_card_html(home_id, home["full_name"]), unsafe_allow_html=True)
+st.caption("Injuries refreshed every 4h via GitHub Actions · sourced from ESPN")
 
 # =========================================================================
 # League average baseline (used in Edge Finder and key metrics)
@@ -253,57 +351,95 @@ lg = _league_means(window, season_filter, _mtime=mtime)
 st.divider()
 
 # =========================================================================
-# Form snapshot — both teams side-by-side with league avg comparison
+# Form snapshot — colored metric cards, 4 per row, ranks vs full league
 # =========================================================================
 st.subheader(f"📊 Form snapshot — {window}")
-st.caption("Δ = team value vs league average. Green = better than league, red = worse.")
+st.caption("Each card shows team value, delta vs league average, and league rank. "
+            "Green = above avg, red = below. Add more metrics later by editing the spec list.")
 
-def _delta_color(team_val, league_val, lower_is_better=False) -> str:
-    if team_val is None or league_val is None or pd.isna(team_val) or pd.isna(league_val):
-        return "off"
-    diff = team_val - league_val
-    if lower_is_better:
-        diff = -diff
-    return "normal" if abs(diff) > 0.01 else "off"
+from lib.coloring import metric_card_html, metric_cards_grid_html
+from lib.data import league_team_table, compute_team_ranks
 
-def _delta_str(team_val, league_val, fmt=lambda x: f"{x:+.1f}"):
+# Build the league table once and compute ranks
+@st.cache_data(show_spinner=False)
+def _league_table_with_ranks(window: str, season_filter: str, _mtime: float):
+    df = league_team_table(window, season_filter, _mtime=_mtime)
+    return compute_team_ranks(df)
+
+league_with_ranks = _league_table_with_ranks(window, season_filter, _mtime=mtime)
+
+
+# Metric specs: (metric_key, label, source, format_fn, lower_is_better, is_neutral)
+# - source: "agg" or "opp"
+# - format_fn: takes float, returns str
+# - lower_is_better: only used to invert delta sign in display
+# - is_neutral: True for Pace etc. — no good/bad direction, always shows neutral color
+def _fmt_num(v):
+    return f"{v:.1f}" if v is not None and pd.notna(v) else "—"
+
+def _fmt_pct(v):
+    return f"{v*100:.1f}" if v is not None and pd.notna(v) else "—"
+
+FORM_METRICS = [
+    # Row 1
+    ("off_rating",    "ORtg",     "agg", _fmt_num, False, False, "raw"),
+    ("def_rating",    "DRtg",     "agg", _fmt_num, True,  False, "raw"),
+    ("net_rating",    "NetRtg",   "agg", _fmt_num, False, False, "raw"),
+    ("pace",          "Pace",     "agg", _fmt_num, False, True,  "raw"),
+    # Row 2
+    ("efg_pct",       "eFG%",     "agg", _fmt_pct, False, False, "pp"),
+    ("ts_pct",        "TS%",      "agg", _fmt_pct, False, False, "pp"),
+    ("opp_efg_pct",   "OPP eFG%", "opp", _fmt_pct, True,  False, "pp"),
+    ("opp_fg3_pct",   "OPP 3P%",  "opp", _fmt_pct, True,  False, "pp"),
+]
+
+def _delta_text(team_val, league_val, kind: str, lower_is_better: bool) -> str | None:
     if team_val is None or league_val is None or pd.isna(team_val) or pd.isna(league_val):
         return None
-    return fmt(team_val - league_val)
+    diff = team_val - league_val
+    if kind == "pp":
+        # convert ratio diff to percentage points
+        return f"{diff*100:+.1f}pp"
+    return f"{diff:+.1f}"
 
-def _form_block(team_id: int, team_name: str):
+def _form_cards_html(team_id: int) -> str:
     agg = team_aggregate(team_id, window, season_filter, _mtime=mtime)
     opp = team_opponent_aggregate(team_id, window, season_filter, _mtime=mtime)
-    st.markdown(f"#### {team_name}")
-    g1, g2, g3, g4 = st.columns(4)
-    g1.metric("ORtg", fmt_num(agg.get("off_rating")),
-               _delta_str(agg.get("off_rating"), lg.get("off_rating")))
-    g2.metric("DRtg", fmt_num(agg.get("def_rating")),
-               _delta_str(agg.get("def_rating"), lg.get("def_rating")),
-               delta_color="inverse")
-    g3.metric("NetRtg", fmt_num(agg.get("net_rating")),
-               _delta_str(agg.get("net_rating"), lg.get("net_rating")))
-    g4.metric("Pace", fmt_num(agg.get("pace")),
-               _delta_str(agg.get("pace"), lg.get("pace")))
-    g5, g6, g7, g8 = st.columns(4)
-    g5.metric("eFG%", fmt_pct(agg.get("efg_pct")),
-               _delta_str(agg.get("efg_pct"), lg.get("efg_pct"),
-                           fmt=lambda x: f"{x*100:+.1f}pp"))
-    g6.metric("TS%", fmt_pct(agg.get("ts_pct")),
-               _delta_str(agg.get("ts_pct"), lg.get("ts_pct"),
-                           fmt=lambda x: f"{x*100:+.1f}pp"))
-    g7.metric("OPP eFG%", fmt_pct(opp.get("opp_efg_pct")),
-               _delta_str(opp.get("opp_efg_pct"), lg.get("opp_efg_pct"),
-                           fmt=lambda x: f"{x*100:+.1f}pp"),
-               delta_color="inverse")
-    g8.metric("OPP 3P%", fmt_pct(opp.get("opp_fg3_pct")),
-               _delta_str(opp.get("opp_fg3_pct"), lg.get("opp_fg3_pct"),
-                           fmt=lambda x: f"{x*100:+.1f}pp"),
-               delta_color="inverse")
+    team_row = league_with_ranks[league_with_ranks["team_id"] == team_id]
 
-bcols = st.columns(2)
-with bcols[0]: _form_block(away_id, away["full_name"])
-with bcols[1]: _form_block(home_id, home["full_name"])
+    cards = []
+    for metric, label, source, fmt_fn, lower_better, is_neutral, delta_kind in FORM_METRICS:
+        src = agg if source == "agg" else opp
+        team_val = src.get(metric)
+        league_val = lg.get(metric)
+        rank = None
+        if not team_row.empty and f"{metric}_rank" in team_row.columns:
+            r = team_row.iloc[0][f"{metric}_rank"]
+            if pd.notna(r):
+                rank = int(r)
+        delta = _delta_text(team_val, league_val, delta_kind, lower_better)
+        cards.append(metric_card_html(
+            label=label,
+            value=fmt_fn(team_val),
+            delta=delta,
+            rank=rank,
+            n_total=30,
+            is_neutral_metric=is_neutral,
+        ))
+    return metric_cards_grid_html(cards, cols=4)
+
+
+# Render: per-team header line + grid
+for team_id, team_obj, side_emoji in [
+    (away_id, away, "✈️"),
+    (home_id, home, "🏠"),
+]:
+    st.markdown(
+        f'<p style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;'
+        f'color:#8B95A8;margin:0.5rem 0 0.5rem;">{side_emoji} {team_obj["full_name"]}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(_form_cards_html(team_id), unsafe_allow_html=True)
 
 st.divider()
 

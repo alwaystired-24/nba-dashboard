@@ -16,6 +16,7 @@ from lib.data import (
     latest_loaded_date,
     team_aggregate,
     team_record,
+    team_lookup,
     all_team_injury_counts,
 )
 from lib.freshness import show_freshness_banner
@@ -39,6 +40,7 @@ st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** form previews. "
             "Change at top of any page.")
 
 injury_counts = all_team_injury_counts(_mtime=mtime)
+tlookup = team_lookup(_mtime=mtime)
 
 # --- Range we want: yesterday, today, tomorrow, +5 more ----------------
 today = date.fromisoformat(hkt_today())
@@ -90,60 +92,95 @@ for label in seen_labels:
     bucket = games[games["hkt_label"] == label].sort_values("game_id")
     finished = (bucket["status"] == "Final").sum()
     total = len(bucket)
-    st.subheader(f"{label}  ·  {total} game{'s' if total != 1 else ''}"
-                  + (f"  ·  {finished} final" if finished else ""))
+    st.markdown(
+        f'<p style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;'
+        f'color:#8B95A8;margin:1.25rem 0 10px;">{label} · {total} game{"s" if total != 1 else ""}'
+        f'{f" · {finished} final" if finished else ""}</p>',
+        unsafe_allow_html=True,
+    )
 
-    # Two-column card layout
+    from lib.branding import team_logo_url
+
+    def _injury_pill(team_abbr: str, count: int) -> str:
+        if count == 0:
+            bg, color, icon = "rgba(62,168,102,0.18)", "#5FBE85", "✓"
+        elif count >= 3:
+            bg, color, icon = "rgba(200,70,70,0.22)", "#E37070", "⚠"
+        else:
+            bg, color, icon = "rgba(244,167,66,0.20)", "#F4A742", "⚠"
+        return (
+            f'<span style="padding:2px 7px;border-radius:4px;background:{bg};'
+            f'color:{color};font-size:11px;">{icon} {team_abbr}: {count}</span>'
+        )
+
+    def _status_pill(status: str) -> str:
+        if status == "Final":
+            return ('<span style="font-size:11px;padding:2px 8px;border-radius:4px;'
+                     'background:#25304a;color:#8B95A8;font-weight:500;">Final</span>')
+        if status == "Live":
+            return ('<span style="font-size:11px;padding:2px 8px;border-radius:4px;'
+                     'background:#F4A742;color:#0E1525;font-weight:500;">Live</span>')
+        return ('<span style="font-size:11px;padding:2px 8px;border-radius:4px;'
+                 'background:rgba(244,167,66,0.15);color:#F4A742;font-weight:500;">Upcoming</span>')
+
+    def _team_row(g, side: str) -> str:
+        team_id = int(g[f"{side}_team_id"])
+        abbr = g[f"{side}_abbr"]
+        full_name = tlookup.get(team_id, {}).get("full_name", abbr)
+        logo = team_logo_url(team_id, size=500)
+        w, l = team_record(team_id, "L10", season_filter, _mtime=mtime)
+
+        # Right-side info: score for Final, dash for upcoming
+        score = ""
+        if g["status"] == "Final" and pd.notna(g[f"{side}_score"]):
+            score = f'<div style="font-size:22px;color:#E5E9F0;font-weight:500;">{int(g[f"{side}_score"])}</div>'
+
+        return (
+            f'<div style="display:flex;align-items:center;justify-content:space-between;'
+            f'margin-bottom:6px;">'
+            f'<div style="display:flex;align-items:center;gap:10px;">'
+            f'<img src="{logo}" style="width:32px;height:32px;" alt="{abbr}">'
+            f'<div>'
+            f'<div style="font-size:14px;color:#E5E9F0;font-weight:500;">{full_name}</div>'
+            f'<div style="font-size:11px;color:#8B95A8;">L10 {w}-{l}</div>'
+            f'</div>'
+            f'</div>'
+            f'{score}'
+            f'</div>'
+        )
+
+    # Two-column grid via HTML
+    rendered_rows = []
+    for _, g in bucket.iterrows():
+        away_inj = injury_counts.get(int(g["away_team_id"]), 0)
+        home_inj = injury_counts.get(int(g["home_team_id"]), 0)
+        meta_parts = []
+        if g["season_type"] != "Regular":
+            meta_parts.append(g["season_type"])
+        meta_parts.append(f"ET {g['game_date']}")
+        meta_text = " · ".join(meta_parts)
+
+        card = (
+            f'<div style="background:#172033;border-radius:12px;padding:14px 16px;'
+            f'margin-bottom:12px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'margin-bottom:12px;">'
+            f'<span style="font-size:11px;color:#8B95A8;">{meta_text}</span>'
+            f'{_status_pill(g["status"])}'
+            f'</div>'
+            f'{_team_row(g, "away")}'
+            f'{_team_row(g, "home")}'
+            f'<div style="margin-top:10px;padding-top:10px;border-top:1px solid #25304a;'
+            f'display:flex;gap:6px;align-items:center;">'
+            f'{_injury_pill(g["away_abbr"], away_inj)}'
+            f'{_injury_pill(g["home_abbr"], home_inj)}'
+            f'</div>'
+            f'</div>'
+        )
+        rendered_rows.append(card)
+
+    # Render in 2-column grid using Streamlit columns (so each card stays within its column)
     cols = st.columns(2)
-    for i, (_, g) in enumerate(bucket.iterrows()):
+    for i, html in enumerate(rendered_rows):
         with cols[i % 2]:
-            with st.container(border=True):
-                top = st.columns([3, 1])
-                top[0].markdown(f"### {matchup_label(g['home_abbr'], g['away_abbr'])}")
-                top[1].markdown(status_badge(g["status"]))
-
-                if g["status"] == "Final" and g["home_score"] is not None:
-                    st.markdown(
-                        f"**Final:**  {g['away_abbr']} {int(g['away_score'])} — "
-                        f"{int(g['home_score'])} {g['home_abbr']}"
-                    )
-                else:
-                    # Show form preview for upcoming
-                    away_w, away_l = team_record(int(g["away_team_id"]), "L10", season_filter, _mtime=mtime)
-                    home_w, home_l = team_record(int(g["home_team_id"]), "L10", season_filter, _mtime=mtime)
-                    away_agg = team_aggregate(int(g["away_team_id"]), "L10", season_filter, _mtime=mtime)
-                    home_agg = team_aggregate(int(g["home_team_id"]), "L10", season_filter, _mtime=mtime)
-                    st.markdown(
-                        f"**{g['away_abbr']}** L10 `{away_w}-{away_l}`  ·  "
-                        f"ORtg `{fmt_num(away_agg.get('off_rating'))}`  ·  "
-                        f"DRtg `{fmt_num(away_agg.get('def_rating'))}`"
-                    )
-                    st.markdown(
-                        f"**{g['home_abbr']}** L10 `{home_w}-{home_l}`  ·  "
-                        f"ORtg `{fmt_num(home_agg.get('off_rating'))}`  ·  "
-                        f"DRtg `{fmt_num(home_agg.get('def_rating'))}`"
-                    )
-
-                # Injury counts (Out/Doubtful/Suspended only — actionable)
-                away_inj = injury_counts.get(int(g["away_team_id"]), 0)
-                home_inj = injury_counts.get(int(g["home_team_id"]), 0)
-                if away_inj or home_inj:
-                    inj_parts = []
-                    if away_inj:
-                        emoji = "🚨" if away_inj >= 3 else "⚠️"
-                        inj_parts.append(f"{emoji} {g['away_abbr']}: {away_inj}")
-                    else:
-                        inj_parts.append(f"✅ {g['away_abbr']}: 0")
-                    if home_inj:
-                        emoji = "🚨" if home_inj >= 3 else "⚠️"
-                        inj_parts.append(f"{emoji} {g['home_abbr']}: {home_inj}")
-                    else:
-                        inj_parts.append(f"✅ {g['home_abbr']}: 0")
-                    st.caption("Injuries — " + "  ·  ".join(inj_parts))
-
-                meta = []
-                if g["season_type"] != "Regular":
-                    meta.append(g["season_type"])
-                meta.append(f"ET {g['game_date']}")
-                st.caption("  ·  ".join(meta))
-    st.divider()
+            st.markdown(html, unsafe_allow_html=True)
