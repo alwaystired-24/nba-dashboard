@@ -12,7 +12,7 @@ import streamlit as st
 
 from lib.data import DB_PATH, db_mtime, league_player_table, team_lookup
 from lib.freshness import show_freshness_banner
-from lib.filters import layer_picker, window_picker
+from lib.filters import layer_picker, window_picker, season_filter_picker, SEASON_FILTER_LABELS
 from lib.format import fmt_num, fmt_pct
 from lib.stats import player_layer_columns
 
@@ -55,6 +55,10 @@ with c3:
     show_pcts = st.toggle("Show percentile (100 = best)", value=False, key="player_pcts",
                             help="Adds a percentile column for each metric. 100 = best, 0 = worst.")
 
+season_filter = season_filter_picker()
+st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** stats. "
+            "Change at top of any page.")
+
 # =========================================================================
 # SIDEBAR FILTERS
 # =========================================================================
@@ -91,7 +95,8 @@ with st.sidebar:
 # =========================================================================
 # DATA
 # =========================================================================
-df = league_player_table(window, min_games=int(min_gp), min_minutes=float(min_min), _mtime=mtime)
+df = league_player_table(window, min_games=int(min_gp), min_minutes=float(min_min),
+                          season_filter=season_filter, _mtime=mtime)
 df = df.merge(demo, on="player_id", how="left")
 
 if teams_sel:

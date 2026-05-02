@@ -26,9 +26,10 @@ from lib.data import (
     team_opponent_aggregate,
     team_recent_games,
     team_record,
+    team_rest_days,
 )
 from lib.freshness import show_freshness_banner
-from lib.filters import window_picker
+from lib.filters import window_picker, season_filter_picker, SEASON_FILTER_LABELS
 from lib.format import (
     fmt_num,
     fmt_pct,
@@ -125,7 +126,13 @@ with gcol:
 
 g = day_games[day_games["label"] == chosen_game_label].iloc[0]
 
-window = window_picker(default="L10")
+filter_col1, filter_col2 = st.columns(2)
+with filter_col1:
+    window = window_picker(default="L10")
+with filter_col2:
+    season_filter = season_filter_picker()
+st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** stats. "
+            "Change at top of any page.")
 
 home_id, away_id = int(g["home_team_id"]), int(g["away_team_id"])
 home, away = tlookup[home_id], tlookup[away_id]
@@ -135,14 +142,27 @@ is_upcoming = g["status"] != "Final"
 # =========================================================================
 # Compact header strip
 # =========================================================================
+def _rest_label(team_id: int, game_date: str) -> str:
+    rd = team_rest_days(team_id, game_date, _mtime=mtime)
+    if rd is None:
+        return "Rest: —"
+    if rd == 0:
+        return "Rest: 🔴 BTB (0)"
+    if rd == 1:
+        return f"Rest: 1 day"
+    if rd >= 3:
+        return f"Rest: 🟢 {rd} days"
+    return f"Rest: {rd} days"
+
 hdr = st.container(border=True)
 with hdr:
     cols = st.columns([3, 2, 3])
     with cols[0]:
-        wA, lA = team_record(away_id, "Season", _mtime=mtime)
-        wA_w, lA_w = team_record(away_id, window, _mtime=mtime)
+        wA, lA = team_record(away_id, "Season", season_filter, _mtime=mtime)
+        wA_w, lA_w = team_record(away_id, window, season_filter, _mtime=mtime)
         st.markdown(f"### ✈️ {away['full_name']}")
         st.markdown(f"Season `{wA}-{lA}`  ·  {window} `{wA_w}-{lA_w}`")
+        st.caption(_rest_label(away_id, g["game_date"]))
     with cols[1]:
         st.markdown(f"<div style='text-align:center'>"
                      f"<h4>{g['game_date']} · {g['season_type']}</h4>"
@@ -155,20 +175,21 @@ with hdr:
                 unsafe_allow_html=True,
             )
     with cols[2]:
-        wH, lH = team_record(home_id, "Season", _mtime=mtime)
-        wH_w, lH_w = team_record(home_id, window, _mtime=mtime)
+        wH, lH = team_record(home_id, "Season", season_filter, _mtime=mtime)
+        wH_w, lH_w = team_record(home_id, window, season_filter, _mtime=mtime)
         st.markdown(f"### 🏠 {home['full_name']}")
         st.markdown(f"Season `{wH}-{lH}`  ·  {window} `{wH_w}-{lH_w}`")
+        st.caption(_rest_label(home_id, g["game_date"]))
 
 # =========================================================================
 # League average baseline (used in Edge Finder and key metrics)
 # =========================================================================
 @st.cache_data(show_spinner=False)
-def _league_means(window: str, _mtime: float):
-    df = league_team_table(window, _mtime=_mtime)
+def _league_means(window: str, season_filter: str, _mtime: float):
+    df = league_team_table(window, season_filter, _mtime=_mtime)
     return df.mean(numeric_only=True).to_dict()
 
-lg = _league_means(window, _mtime=mtime)
+lg = _league_means(window, season_filter, _mtime=mtime)
 
 st.divider()
 
@@ -192,8 +213,8 @@ def _delta_str(team_val, league_val, fmt=lambda x: f"{x:+.1f}"):
     return fmt(team_val - league_val)
 
 def _form_block(team_id: int, team_name: str):
-    agg = team_aggregate(team_id, window, _mtime=mtime)
-    opp = team_opponent_aggregate(team_id, window, _mtime=mtime)
+    agg = team_aggregate(team_id, window, season_filter, _mtime=mtime)
+    opp = team_opponent_aggregate(team_id, window, season_filter, _mtime=mtime)
     st.markdown(f"#### {team_name}")
     g1, g2, g3, g4 = st.columns(4)
     g1.metric("ORtg", fmt_num(agg.get("off_rating")),
@@ -233,7 +254,7 @@ st.divider()
 st.subheader("📈 Last 20 games — trend")
 
 def _trend(team_id: int, team_name: str, color: str):
-    df = team_recent_games(team_id, last_n=20, _mtime=mtime).sort_values("game_date")
+    df = team_recent_games(team_id, last_n=20, season_filter=season_filter, _mtime=mtime).sort_values("game_date")
     if df.empty:
         st.caption(f"No data for {team_name}")
         return
@@ -264,10 +285,10 @@ st.caption(
     "League average shown for context. Bigger gaps = bigger edges."
 )
 
-a_off = team_aggregate(away_id, window, _mtime=mtime)
-a_def = team_opponent_aggregate(away_id, window, _mtime=mtime)
-h_off = team_aggregate(home_id, window, _mtime=mtime)
-h_def = team_opponent_aggregate(home_id, window, _mtime=mtime)
+a_off = team_aggregate(away_id, window, season_filter, _mtime=mtime)
+a_def = team_opponent_aggregate(away_id, window, season_filter, _mtime=mtime)
+h_off = team_aggregate(home_id, window, season_filter, _mtime=mtime)
+h_def = team_opponent_aggregate(home_id, window, season_filter, _mtime=mtime)
 
 # (label, away_offense_value, home_defense_allowed, home_offense_value, away_defense_allowed, league_avg, format_fn)
 def _pct(x): return fmt_pct(x)

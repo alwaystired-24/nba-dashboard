@@ -167,9 +167,34 @@ WINDOW_TO_LAST_N: dict[str, int | None] = {
 }
 
 
-def _team_recent_games_cte(team_id: int, last_n: int | None) -> str:
-    """Subquery: latest N completed games for a team, regardless of home/away."""
+def _season_filter_clause(season_filter: str = "both") -> str:
+    """Return a SQL fragment to filter games by season type.
+
+    Args:
+        season_filter: 'reg' | 'playoffs' | 'both'.
+
+    Note: NBA's schedule API uses these season_type values:
+      - 'Regular' (regular season)
+      - 'Playoffs'
+      - 'PlayIn' (play-in tournament — counted as playoffs for analysis)
+      - 'PreSeason' (always excluded)
+    """
+    if season_filter == "reg":
+        return "AND g.season_type = 'Regular'"
+    if season_filter == "playoffs":
+        return "AND g.season_type IN ('Playoffs', 'PlayIn')"
+    # 'both' — include reg + playoffs + play-in, exclude preseason
+    return "AND g.season_type IN ('Regular', 'Playoffs', 'PlayIn')"
+
+
+def _team_recent_games_cte(team_id: int, last_n: int | None,
+                            season_filter: str = "both") -> str:
+    """Subquery: latest N completed games for a team, regardless of home/away.
+
+    season_filter: 'reg' | 'playoffs' | 'both' — filters games by season type.
+    """
     limit_clause = f"LIMIT {last_n}" if last_n else ""
+    season_clause = _season_filter_clause(season_filter)
     return f"""
     WITH recent AS (
         SELECT g.game_id, g.game_date,
@@ -177,6 +202,7 @@ def _team_recent_games_cte(team_id: int, last_n: int | None) -> str:
         FROM games g
         WHERE g.status = 'Final'
           AND (g.home_team_id = {team_id} OR g.away_team_id = {team_id})
+          {season_clause}
         ORDER BY g.game_date DESC
         {limit_clause}
     )
@@ -184,11 +210,12 @@ def _team_recent_games_cte(team_id: int, last_n: int | None) -> str:
 
 
 @st.cache_data(show_spinner=False)
-def team_aggregate(team_id: int, window: str, _mtime: float = 0.0) -> dict:
+def team_aggregate(team_id: int, window: str, season_filter: str = "both",
+                    _mtime: float = 0.0) -> dict:
     """Return averages across the window for one team. Combines traditional + advanced."""
     last_n = WINDOW_TO_LAST_N[window]
     with _connect() as conn:
-        cte = _team_recent_games_cte(team_id, last_n)
+        cte = _team_recent_games_cte(team_id, last_n, season_filter)
         row = conn.execute(
             cte + f"""
             SELECT
@@ -227,11 +254,12 @@ def team_aggregate(team_id: int, window: str, _mtime: float = 0.0) -> dict:
 
 
 @st.cache_data(show_spinner=False)
-def team_record(team_id: int, window: str, _mtime: float = 0.0) -> tuple[int, int]:
+def team_record(team_id: int, window: str, season_filter: str = "both",
+                 _mtime: float = 0.0) -> tuple[int, int]:
     """W-L record across the window."""
     last_n = WINDOW_TO_LAST_N[window]
     with _connect() as conn:
-        cte = _team_recent_games_cte(team_id, last_n)
+        cte = _team_recent_games_cte(team_id, last_n, season_filter)
         rows = conn.execute(
             cte + f"""
             SELECT g.home_team_id, g.away_team_id, g.home_score, g.away_score
@@ -250,14 +278,15 @@ def team_record(team_id: int, window: str, _mtime: float = 0.0) -> tuple[int, in
 
 
 @st.cache_data(show_spinner=False)
-def team_opponent_aggregate(team_id: int, window: str, _mtime: float = 0.0) -> dict:
+def team_opponent_aggregate(team_id: int, window: str, season_filter: str = "both",
+                              _mtime: float = 0.0) -> dict:
     """Stats of the OPPONENTS faced — what this team allowed across the window.
 
     This drives the Defence layer: opp_pts allowed, opp eFG% allowed, etc.
     """
     last_n = WINDOW_TO_LAST_N[window]
     with _connect() as conn:
-        cte = _team_recent_games_cte(team_id, last_n)
+        cte = _team_recent_games_cte(team_id, last_n, season_filter)
         row = conn.execute(
             cte + f"""
             SELECT
@@ -282,12 +311,14 @@ def team_opponent_aggregate(team_id: int, window: str, _mtime: float = 0.0) -> d
 
 
 @st.cache_data(show_spinner=False)
-def team_recent_games(team_id: int, last_n: int = 20, _mtime: float = 0.0) -> pd.DataFrame:
+def team_recent_games(team_id: int, last_n: int = 20, season_filter: str = "both",
+                       _mtime: float = 0.0) -> pd.DataFrame:
     """One row per game with both teams' summary — for trend charts."""
+    season_clause = _season_filter_clause(season_filter)
     with _connect() as conn:
         return pd.read_sql_query(
             f"""
-            SELECT g.game_id, g.game_date,
+            SELECT g.game_id, g.game_date, g.season_type,
                    CASE WHEN g.home_team_id = ? THEN 'H' ELSE 'A' END AS site,
                    CASE WHEN g.home_team_id = ? THEN g.away_team_id ELSE g.home_team_id END AS opp_id,
                    tbt.pts, tbt.fg_pct, tbt.fg3_pct,
@@ -303,6 +334,7 @@ def team_recent_games(team_id: int, last_n: int = 20, _mtime: float = 0.0) -> pd
               ON opp_tbt.game_id = g.game_id AND opp_tbt.team_id != ?
             WHERE g.status = 'Final'
               AND (g.home_team_id = ? OR g.away_team_id = ?)
+              {season_clause}
             ORDER BY g.game_date DESC
             LIMIT ?
             """,
@@ -315,14 +347,15 @@ def team_recent_games(team_id: int, last_n: int = 20, _mtime: float = 0.0) -> pd
 # =========================================================================
 
 @st.cache_data(show_spinner=False)
-def league_team_table(window: str, _mtime: float = 0.0) -> pd.DataFrame:
+def league_team_table(window: str, season_filter: str = "both",
+                       _mtime: float = 0.0) -> pd.DataFrame:
     """One row per team, averaged over the window. Used by the Team Stats page."""
     last_n = WINDOW_TO_LAST_N[window]
     rows = []
     for tm in teams(_mtime).itertuples(index=False):
-        agg = team_aggregate(int(tm.team_id), window, _mtime=_mtime)
-        opp = team_opponent_aggregate(int(tm.team_id), window, _mtime=_mtime)
-        w, l = team_record(int(tm.team_id), window, _mtime=_mtime)
+        agg = team_aggregate(int(tm.team_id), window, season_filter, _mtime=_mtime)
+        opp = team_opponent_aggregate(int(tm.team_id), window, season_filter, _mtime=_mtime)
+        w, l = team_record(int(tm.team_id), window, season_filter, _mtime=_mtime)
         rows.append({
             "team_id": int(tm.team_id), "abbr": tm.abbreviation, "team": tm.full_name,
             "gp": agg.get("gp", 0), "w": w, "l": l,
@@ -396,10 +429,12 @@ def upcoming_games(start_date: str, days: int = 7, _mtime: float = 0.0) -> pd.Da
 # =========================================================================
 
 @st.cache_data(show_spinner=False)
-def player_aggregate(player_id: int, window: str, _mtime: float = 0.0) -> dict:
+def player_aggregate(player_id: int, window: str, season_filter: str = "both",
+                      _mtime: float = 0.0) -> dict:
     """Player averages across the window."""
     last_n = WINDOW_TO_LAST_N[window]
     limit_clause = f"LIMIT {last_n}" if last_n else ""
+    season_clause = _season_filter_clause(season_filter)
     with _connect() as conn:
         row = conn.execute(
             f"""
@@ -408,6 +443,7 @@ def player_aggregate(player_id: int, window: str, _mtime: float = 0.0) -> dict:
                 FROM player_box_traditional pbt
                 JOIN games g ON g.game_id = pbt.game_id
                 WHERE pbt.player_id = ? AND g.status = 'Final' AND pbt.minutes > 0
+                  {season_clause}
                 ORDER BY g.game_date DESC
                 {limit_clause}
             )
@@ -446,10 +482,12 @@ def player_aggregate(player_id: int, window: str, _mtime: float = 0.0) -> dict:
 
 @st.cache_data(show_spinner=False)
 def league_player_table(window: str, min_games: int = 5, min_minutes: float = 12.0,
+                        season_filter: str = "both",
                         _mtime: float = 0.0) -> pd.DataFrame:
     """Aggregate every active player across the window, filter by GP / MPG threshold."""
     last_n = WINDOW_TO_LAST_N[window]
     limit_clause = f"LIMIT {last_n}" if last_n else ""
+    season_clause = _season_filter_clause(season_filter)
     with _connect() as conn:
         df = pd.read_sql_query(
             f"""
@@ -457,6 +495,7 @@ def league_player_table(window: str, min_games: int = 5, min_minutes: float = 12
                 SELECT DISTINCT g.game_id
                 FROM games g
                 WHERE g.status = 'Final'
+                  {season_clause}
             ),
             ranked AS (
                 SELECT pbt.player_id, pbt.team_id, pbt.game_id, g.game_date,
@@ -470,6 +509,7 @@ def league_player_table(window: str, min_games: int = 5, min_minutes: float = 12
                 LEFT JOIN player_box_advanced pba
                   ON pba.game_id = pbt.game_id AND pba.player_id = pbt.player_id
                 WHERE pbt.minutes > 0
+                  AND pbt.game_id IN (SELECT game_id FROM game_filter)
             )
             SELECT player_id, team_id,
                    COUNT(*) AS gp,
@@ -541,6 +581,42 @@ def compute_player_ranks(df: pd.DataFrame) -> pd.DataFrame:
         out[f"{c}_rank"] = df[c].rank(method="min", ascending=ascending,
                                         na_option="bottom").astype("Int64")
     return out
+
+
+# =========================================================================
+# REST DAYS — days since the team's last game
+# =========================================================================
+
+@st.cache_data(show_spinner=False)
+def team_rest_days(team_id: int, game_date: str, _mtime: float = 0.0) -> int | None:
+    """Return days of rest before this game. None if no prior game in DB.
+
+    Rest = (game_date - prior_game_date) - 1.
+    Examples:
+      Team played yesterday, game today -> 0 (back-to-back)
+      Team played 2 days ago, game today -> 1
+      First game of season -> None (returns None to display as "—")
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(g.game_date) AS prior_date
+            FROM games g
+            WHERE (g.home_team_id = ? OR g.away_team_id = ?)
+              AND g.status = 'Final'
+              AND g.game_date < ?
+            """,
+            (team_id, team_id, game_date),
+        ).fetchone()
+    if not row or not row["prior_date"]:
+        return None
+    from datetime import date
+    try:
+        d_game = date.fromisoformat(game_date)
+        d_prior = date.fromisoformat(row["prior_date"])
+        return (d_game - d_prior).days - 1
+    except (ValueError, TypeError):
+        return None
 
 
 # =========================================================================

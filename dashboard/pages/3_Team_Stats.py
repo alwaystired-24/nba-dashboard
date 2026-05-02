@@ -11,7 +11,7 @@ import streamlit as st
 
 from lib.data import db_mtime, league_team_table, team_lookup, team_recent_games
 from lib.freshness import show_freshness_banner
-from lib.filters import layer_picker, window_picker
+from lib.filters import layer_picker, window_picker, season_filter_picker, SEASON_FILTER_LABELS
 from lib.format import fmt_num, fmt_pct
 from lib.stats import team_layer_columns
 
@@ -39,6 +39,10 @@ with c3:
     show_ranks = st.toggle("Show rank (1 = best)", value=False,
                             help="Adds a rank column for each metric. 1 = league best, 30 = worst.")
 
+season_filter = season_filter_picker()
+st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** stats. "
+            "Change at top of any page.")
+
 # =========================================================================
 # SIDEBAR FILTERS
 # =========================================================================
@@ -64,7 +68,7 @@ with st.sidebar:
 # =========================================================================
 # DATA — ranks always vs full league
 # =========================================================================
-df_full = league_team_table(window, _mtime=mtime).reset_index(drop=True)
+df_full = league_team_table(window, season_filter, _mtime=mtime).reset_index(drop=True)
 
 specs = team_layer_columns(layer)
 rank_data = {}
@@ -187,7 +191,7 @@ if sel_rows:
         st.divider()
         st.subheader(f"📋 {team_name} — last 20 games")
 
-        games = team_recent_games(team_id, last_n=20, _mtime=mtime)
+        games = team_recent_games(team_id, last_n=20, season_filter=season_filter, _mtime=mtime)
         if games.empty:
             st.caption("No games found.")
         else:

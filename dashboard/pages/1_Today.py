@@ -18,6 +18,7 @@ from lib.data import (
     team_record,
 )
 from lib.freshness import show_freshness_banner
+from lib.filters import season_filter_picker, SEASON_FILTER_LABELS
 from lib.format import (
     fmt_num,
     hkt_to_et_date,
@@ -31,6 +32,10 @@ st.title("📅 Today & Upcoming")
 
 mtime = db_mtime()
 show_freshness_banner(mtime)
+
+season_filter = season_filter_picker()
+st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** form previews. "
+            "Change at top of any page.")
 
 # --- Range we want: yesterday, today, tomorrow, +5 more ----------------
 today = date.fromisoformat(hkt_today())
@@ -101,10 +106,10 @@ for label in seen_labels:
                     )
                 else:
                     # Show form preview for upcoming
-                    away_w, away_l = team_record(int(g["away_team_id"]), "L10", _mtime=mtime)
-                    home_w, home_l = team_record(int(g["home_team_id"]), "L10", _mtime=mtime)
-                    away_agg = team_aggregate(int(g["away_team_id"]), "L10", _mtime=mtime)
-                    home_agg = team_aggregate(int(g["home_team_id"]), "L10", _mtime=mtime)
+                    away_w, away_l = team_record(int(g["away_team_id"]), "L10", season_filter, _mtime=mtime)
+                    home_w, home_l = team_record(int(g["home_team_id"]), "L10", season_filter, _mtime=mtime)
+                    away_agg = team_aggregate(int(g["away_team_id"]), "L10", season_filter, _mtime=mtime)
+                    home_agg = team_aggregate(int(g["home_team_id"]), "L10", season_filter, _mtime=mtime)
                     st.markdown(
                         f"**{g['away_abbr']}** L10 `{away_w}-{away_l}`  ·  "
                         f"ORtg `{fmt_num(away_agg.get('off_rating'))}`  ·  "

@@ -11,6 +11,7 @@ from pathlib import Path
 import streamlit as st
 
 from lib.data import DB_PATH, db_mtime, latest_loaded_date
+from lib.filters import season_filter_picker, SEASON_FILTER_LABELS
 from lib.format import HKT, hkt_now_label
 from lib.freshness import show_freshness_banner
 
@@ -45,6 +46,12 @@ with st.container(border=True):
     cols[0].metric("Last DB update (HKT)", mtime_dt.strftime("%a %d %b %H:%M"))
     cols[1].metric("Latest game date in DB", last_data_date or "—")
     cols[2].metric("Now", hkt_now_label())
+
+# Global season filter — also surfaces in sidebar for visibility
+st.markdown("##### 🎛️ Season filter")
+season_filter = season_filter_picker()
+st.caption(f"Currently filtering by **{SEASON_FILTER_LABELS[season_filter]}** "
+            "across all pages. Change it on any page, it persists.")
 
 st.markdown(
     """
