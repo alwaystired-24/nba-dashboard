@@ -352,10 +352,9 @@ with st.expander(f"📋 Head-to-head this season — {away['abbreviation']} vs {
 
 
 # =========================================================================
-# ODDS — Phase 6
+# ODDS — Phase 6 — three tables, raw decimal prices, opener/pre_game/late
 # =========================================================================
 from lib.odds_data import odds_for_game
-from lib.odds_math import fair_line_report, decimal_to_american
 
 st.divider()
 st.subheader("💰 Odds")
@@ -369,124 +368,122 @@ if odds_df.empty:
         "(opener / pre_game / late). Check back closer to tip-off."
     )
 else:
-    # Get the most recent snapshot per book per market
-    odds_df = odds_df.sort_values("fetched_utc")
-    latest = (odds_df.groupby(["bookmaker", "market"], as_index=False)
-                       .tail(1).reset_index(drop=True))
-
-    st.caption(f"{len(odds_df)} total snapshots across {odds_df['snapshot_phase'].nunique()} phases. "
-                f"Showing latest line per book/market below.")
-
-    # ---- Current lines per book ----
-    st.markdown("#### Current lines")
-    lines_rows = []
-    for bm in latest["bookmaker"].unique():
-        bm_rows = latest[latest["bookmaker"] == bm]
-        h2h = bm_rows[bm_rows["market"] == "h2h"].iloc[0] if not bm_rows[bm_rows["market"] == "h2h"].empty else None
-        sp  = bm_rows[bm_rows["market"] == "spreads"].iloc[0] if not bm_rows[bm_rows["market"] == "spreads"].empty else None
-        tot = bm_rows[bm_rows["market"] == "totals"].iloc[0] if not bm_rows[bm_rows["market"] == "totals"].empty else None
-
-        row = {"Book": bm.upper()}
-        if h2h is not None:
-            row[f"{away['abbreviation']} ML"] = decimal_to_american(h2h["away_price"])
-            row[f"{home['abbreviation']} ML"] = decimal_to_american(h2h["home_price"])
-        if sp is not None:
-            row[f"{away['abbreviation']} Spread"] = (
-                f"{sp['spread_away']:+.1f} ({decimal_to_american(sp['away_price'])})"
-                if pd.notna(sp['spread_away']) else "—"
-            )
-            row[f"{home['abbreviation']} Spread"] = (
-                f"{sp['spread_home']:+.1f} ({decimal_to_american(sp['home_price'])})"
-                if pd.notna(sp['spread_home']) else "—"
-            )
-        if tot is not None:
-            row["Total"] = f"{tot['total_line']}" if pd.notna(tot['total_line']) else "—"
-            row["Over"] = decimal_to_american(tot["over_price"])
-            row["Under"] = decimal_to_american(tot["under_price"])
-        lines_rows.append(row)
-    st.dataframe(pd.DataFrame(lines_rows), hide_index=True, width="stretch")
-
-    # ---- Implied probability + vig + no-vig fair line ----
-    st.markdown("#### Implied probability · Vig · No-vig fair line")
-    fair_rows = []
-    for _, r in latest.iterrows():
-        if r["market"] == "h2h":
-            rep = fair_line_report(r["away_price"], r["home_price"])
-            fair_rows.append({
-                "Book": r["bookmaker"].upper(),
-                "Market": "Moneyline",
-                f"{away['abbreviation']} implied %": f"{rep['implied_prob_a']*100:.1f}%" if rep['implied_prob_a'] else "—",
-                f"{home['abbreviation']} implied %": f"{rep['implied_prob_b']*100:.1f}%" if rep['implied_prob_b'] else "—",
-                f"{away['abbreviation']} fair %": f"{rep['fair_prob_a']*100:.1f}%" if rep['fair_prob_a'] else "—",
-                f"{home['abbreviation']} fair %": f"{rep['fair_prob_b']*100:.1f}%" if rep['fair_prob_b'] else "—",
-                f"{away['abbreviation']} fair price": f"{rep['fair_decimal_a']:.3f}" if rep['fair_decimal_a'] else "—",
-                f"{home['abbreviation']} fair price": f"{rep['fair_decimal_b']:.3f}" if rep['fair_decimal_b'] else "—",
-                "Vig %": f"{rep['vig_pct']:.2f}%" if rep['vig_pct'] is not None else "—",
-            })
-        elif r["market"] == "spreads":
-            rep = fair_line_report(r["away_price"], r["home_price"])
-            fair_rows.append({
-                "Book": r["bookmaker"].upper(),
-                "Market": f"Spread {r['spread_away']:+.1f}/{r['spread_home']:+.1f}",
-                f"{away['abbreviation']} implied %": f"{rep['implied_prob_a']*100:.1f}%" if rep['implied_prob_a'] else "—",
-                f"{home['abbreviation']} implied %": f"{rep['implied_prob_b']*100:.1f}%" if rep['implied_prob_b'] else "—",
-                f"{away['abbreviation']} fair %": f"{rep['fair_prob_a']*100:.1f}%" if rep['fair_prob_a'] else "—",
-                f"{home['abbreviation']} fair %": f"{rep['fair_prob_b']*100:.1f}%" if rep['fair_prob_b'] else "—",
-                f"{away['abbreviation']} fair price": f"{rep['fair_decimal_a']:.3f}" if rep['fair_decimal_a'] else "—",
-                f"{home['abbreviation']} fair price": f"{rep['fair_decimal_b']:.3f}" if rep['fair_decimal_b'] else "—",
-                "Vig %": f"{rep['vig_pct']:.2f}%" if rep['vig_pct'] is not None else "—",
-            })
-        elif r["market"] == "totals":
-            rep = fair_line_report(r["over_price"], r["under_price"])
-            fair_rows.append({
-                "Book": r["bookmaker"].upper(),
-                "Market": f"Total {r['total_line']}",
-                f"{away['abbreviation']} implied %": f"O: {rep['implied_prob_a']*100:.1f}%" if rep['implied_prob_a'] else "—",
-                f"{home['abbreviation']} implied %": f"U: {rep['implied_prob_b']*100:.1f}%" if rep['implied_prob_b'] else "—",
-                f"{away['abbreviation']} fair %": f"O: {rep['fair_prob_a']*100:.1f}%" if rep['fair_prob_a'] else "—",
-                f"{home['abbreviation']} fair %": f"U: {rep['fair_prob_b']*100:.1f}%" if rep['fair_prob_b'] else "—",
-                f"{away['abbreviation']} fair price": f"O: {rep['fair_decimal_a']:.3f}" if rep['fair_decimal_a'] else "—",
-                f"{home['abbreviation']} fair price": f"U: {rep['fair_decimal_b']:.3f}" if rep['fair_decimal_b'] else "—",
-                "Vig %": f"{rep['vig_pct']:.2f}%" if rep['vig_pct'] is not None else "—",
-            })
-    st.dataframe(pd.DataFrame(fair_rows), hide_index=True, width="stretch")
-
-    # ---- Line movement chart ----
-    st.markdown("#### Line movement")
-    movement_market = st.radio("Market", ["spreads", "totals", "h2h"],
-                                  horizontal=True, key="line_move_market")
-    move_data = odds_df[odds_df["market"] == movement_market].copy()
-    if move_data.empty:
-        st.caption(f"No {movement_market} snapshots yet.")
-    else:
-        move_data["fetched_dt"] = pd.to_datetime(move_data["fetched_utc"])
-        fig = go.Figure()
-        if movement_market == "spreads":
-            for bm in move_data["bookmaker"].unique():
-                d = move_data[move_data["bookmaker"] == bm].sort_values("fetched_dt")
-                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["spread_home"],
-                                           name=f"{bm.upper()} {home['abbreviation']} spread",
-                                           mode="lines+markers"))
-            fig.update_layout(yaxis_title=f"{home['abbreviation']} spread")
-        elif movement_market == "totals":
-            for bm in move_data["bookmaker"].unique():
-                d = move_data[move_data["bookmaker"] == bm].sort_values("fetched_dt")
-                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["total_line"],
-                                           name=f"{bm.upper()} total", mode="lines+markers"))
-            fig.update_layout(yaxis_title="Total")
-        else:  # h2h
-            for bm in move_data["bookmaker"].unique():
-                d = move_data[move_data["bookmaker"] == bm].sort_values("fetched_dt")
-                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["home_price"],
-                                           name=f"{bm.upper()} {home['abbreviation']} ML",
-                                           mode="lines+markers"))
-                fig.add_trace(go.Scatter(x=d["fetched_dt"], y=d["away_price"],
-                                           name=f"{bm.upper()} {away['abbreviation']} ML",
-                                           mode="lines+markers", line=dict(dash="dash")))
-            fig.update_layout(yaxis_title="Decimal price")
-        fig.update_layout(
-            height=350, margin=dict(l=10, r=10, t=20, b=10),
-            xaxis_title="Snapshot time (UTC)",
-            legend=dict(orientation="h", y=-0.15),
+    # Detect missing phases (until system has been running 3 full days)
+    PHASES = ["opener", "pre_game", "late"]
+    captured_phases = set(odds_df["snapshot_phase"].dropna().unique())
+    missing = [p for p in PHASES if p not in captured_phases]
+    if missing:
+        st.warning(
+            f"⚠️ Partial data — only captured: **{', '.join(sorted(captured_phases)) or 'none'}**. "
+            f"Missing: **{', '.join(missing)}**. "
+            "This is normal until the system has run 3+ days. "
+            "Empty cells (—) below indicate phases not yet collected.",
+            icon="⏳",
         )
-        st.plotly_chart(fig, width="stretch")
+
+    # Helper: pivot odds_df to {(book, phase): row} for fast lookup per market
+    def _phase_lookup(df_market: pd.DataFrame) -> dict:
+        """For one market's df, return {(book, phase): latest_row_in_that_phase}."""
+        out = {}
+        # If multiple snapshots exist for same (book, phase), take the most recent
+        df_market = df_market.sort_values("fetched_utc")
+        for (book, phase), grp in df_market.groupby(["bookmaker", "snapshot_phase"]):
+            out[(book, phase)] = grp.iloc[-1]
+        return out
+
+    def _fmt(x, pat="{:.2f}"):
+        if x is None or pd.isna(x):
+            return "—"
+        return pat.format(x)
+
+    def _fmt_pt(x):
+        if x is None or pd.isna(x):
+            return "—"
+        return f"{x:+g}" if x else "0"
+
+    # ---------------------------------------------------------------
+    # Moneyline table
+    # ---------------------------------------------------------------
+    st.markdown("#### Moneyline")
+    h2h_df = odds_df[odds_df["market"] == "h2h"]
+    if h2h_df.empty:
+        st.caption("No moneyline data captured.")
+    else:
+        lookup = _phase_lookup(h2h_df)
+        books = sorted(h2h_df["bookmaker"].unique())
+        rows = []
+        for book in books:
+            row = {"Book": book.upper()}
+            for phase in PHASES:
+                r = lookup.get((book, phase))
+                if r is None:
+                    row[f"{phase} · {away['abbreviation']}"] = "—"
+                    row[f"{phase} · {home['abbreviation']}"] = "—"
+                else:
+                    row[f"{phase} · {away['abbreviation']}"] = _fmt(r["away_price"])
+                    row[f"{phase} · {home['abbreviation']}"] = _fmt(r["home_price"])
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    # ---------------------------------------------------------------
+    # Spread table
+    # ---------------------------------------------------------------
+    st.markdown("#### Spread")
+    sp_df = odds_df[odds_df["market"] == "spreads"]
+    if sp_df.empty:
+        st.caption("No spread data captured.")
+    else:
+        lookup = _phase_lookup(sp_df)
+        books = sorted(sp_df["bookmaker"].unique())
+        rows = []
+        for book in books:
+            row = {"Book": book.upper()}
+            for phase in PHASES:
+                r = lookup.get((book, phase))
+                if r is None:
+                    row[f"{phase} · line"] = "—"
+                    row[f"{phase} · {away['abbreviation']} px"] = "—"
+                    row[f"{phase} · {home['abbreviation']} px"] = "—"
+                else:
+                    # Show line as home perspective (e.g., LAL -4.5)
+                    spread_h = r["spread_home"]
+                    if pd.notna(spread_h):
+                        row[f"{phase} · line"] = f"{home['abbreviation']} {spread_h:+g}"
+                    else:
+                        row[f"{phase} · line"] = "—"
+                    row[f"{phase} · {away['abbreviation']} px"] = _fmt(r["away_price"])
+                    row[f"{phase} · {home['abbreviation']} px"] = _fmt(r["home_price"])
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    # ---------------------------------------------------------------
+    # Total table
+    # ---------------------------------------------------------------
+    st.markdown("#### Total")
+    tot_df = odds_df[odds_df["market"] == "totals"]
+    if tot_df.empty:
+        st.caption("No total data captured.")
+    else:
+        lookup = _phase_lookup(tot_df)
+        books = sorted(tot_df["bookmaker"].unique())
+        rows = []
+        for book in books:
+            row = {"Book": book.upper()}
+            for phase in PHASES:
+                r = lookup.get((book, phase))
+                if r is None:
+                    row[f"{phase} · line"] = "—"
+                    row[f"{phase} · O px"] = "—"
+                    row[f"{phase} · U px"] = "—"
+                else:
+                    line = r["total_line"]
+                    row[f"{phase} · line"] = f"{line:g}" if pd.notna(line) else "—"
+                    row[f"{phase} · O px"] = _fmt(r["over_price"])
+                    row[f"{phase} · U px"] = _fmt(r["under_price"])
+            rows.append(row)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+
+    st.caption(
+        f"All prices in decimal odds. {len(odds_df)} total snapshot rows across "
+        f"{len(captured_phases)} phase(s)."
+    )
