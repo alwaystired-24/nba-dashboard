@@ -128,16 +128,36 @@ def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
             if not game_date and game_dt_et:
                 game_date = str(game_dt_et)[:10]
 
-            # gameLabel like "Regular Season" / "Playoffs" / "Play-In Tournament"
-            label = (r.get("gameLabel") or "").strip().lower()
-            if "play-in" in label or "playin" in label:
-                season_type = "PlayIn"
-            elif "playoff" in label or label.startswith("round") or "finals" in label:
-                season_type = "Playoffs"
-            elif "preseason" in label or "pre season" in label:
-                season_type = "PreSeason"
-            else:
-                season_type = "Regular"
+            # Determine season_type from game_id prefix (most reliable)
+            # NBA game_id format: 002SSXXXXX (preseason), 0022SSXXXXX (regular),
+            #   0042SSXXXXX (playoffs), 0052SSXXXXX (play-in), 0012SSXXXXX (preseason)
+            # Where SS = season year, XXXXX = sequential
+            season_type = None
+            if gid and len(gid) >= 4:
+                prefix = gid[:4]
+                if prefix == "0042":
+                    season_type = "Playoffs"
+                elif prefix == "0052":
+                    season_type = "PlayIn"
+                elif prefix == "0012":
+                    season_type = "PreSeason"
+                elif prefix == "0022":
+                    season_type = "Regular"
+                # Older preseason formats
+                elif gid.startswith("001"):
+                    season_type = "PreSeason"
+
+            # Fallback to gameLabel if game_id prefix didn't tell us
+            if not season_type:
+                label = (r.get("gameLabel") or "").strip().lower()
+                if "play-in" in label or "playin" in label:
+                    season_type = "PlayIn"
+                elif "playoff" in label or label.startswith("round") or "finals" in label:
+                    season_type = "Playoffs"
+                elif "preseason" in label or "pre season" in label:
+                    season_type = "PreSeason"
+                else:
+                    season_type = "Regular"
 
             home_score = _safe_int(r.get("homeTeam_score"))
             away_score = _safe_int(r.get("awayTeam_score"))

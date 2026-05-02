@@ -84,6 +84,11 @@ for col, _, _ in specs:
 df = df_full.copy()
 df["conference"] = df["team_id"].map(lambda t: tlookup.get(int(t), {}).get("conference"))
 df["division"] = df["team_id"].map(lambda t: tlookup.get(int(t), {}).get("division"))
+
+# Hide 0-GP teams when Playoffs filter is on (eliminated/non-qualifying teams)
+if season_filter == "playoffs":
+    df = df[df["gp"] > 0]
+
 if teams_sel:
     df = df[df["abbr"].isin(teams_sel)]
 if conf_sel:

@@ -77,16 +77,27 @@ with st.sidebar:
     else:
         age_range = None
         st.caption("Age data unavailable — run `python -m scripts.run demographics`")
-    min_gp = st.number_input("Min GP", min_value=1, max_value=82, value=5, key="ps_mingp")
-    min_min = st.number_input("Min MIN", min_value=0.0, max_value=48.0, value=12.0, step=1.0, key="ps_minmin")
+    # Defaults adapt to season type — playoffs has fewer games, so lower threshold
+    if season_filter == "playoffs":
+        default_gp, default_min = 1, 0.0
+        gp_help = "Min playoff games. Default lowered to 1 since playoffs are short."
+    else:
+        default_gp, default_min = 5, 12.0
+        gp_help = None
+    min_gp = st.number_input("Min GP", min_value=1, max_value=82,
+                              value=default_gp, key=f"ps_mingp_{season_filter}",
+                              help=gp_help)
+    min_min = st.number_input("Min MIN", min_value=0.0, max_value=48.0,
+                                value=default_min, step=1.0,
+                                key=f"ps_minmin_{season_filter}")
 
     active = []
     if teams_sel: active.append(f"{len(teams_sel)} team(s)")
     if pos_sel: active.append(f"{len(pos_sel)} pos")
     if age_range and (age_range[0] != age_min or age_range[1] != age_max):
         active.append(f"age {age_range[0]}–{age_range[1]}")
-    if min_gp != 5: active.append(f"GP≥{min_gp}")
-    if min_min != 12.0: active.append(f"MIN≥{min_min}")
+    if min_gp != default_gp: active.append(f"GP≥{min_gp}")
+    if min_min != default_min: active.append(f"MIN≥{min_min}")
     if active:
         st.markdown(f"**Active:** {', '.join(active)}")
     else:
