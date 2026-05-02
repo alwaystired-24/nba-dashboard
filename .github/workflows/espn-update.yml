@@ -1,0 +1,46 @@
+name: ESPN Update
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 4 hours, all UTC. Catches morning/midday/evening status updates.
+    - cron: '0 */4 * * *'
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 8
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+
+      - name: Apply ESPN schema
+        run: python -m scripts.run espn_init
+
+      - name: Fetch ESPN data
+        run: python -m scripts.run espn
+
+      - name: Commit DB if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/nba.db
+          if git diff --cached --quiet; then
+            echo "No DB changes — nothing to commit"
+          else
+            STAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "ESPN update: $STAMP"
+            git push
+          fi
