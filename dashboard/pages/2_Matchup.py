@@ -27,6 +27,8 @@ from lib.data import (
     team_recent_games,
     team_record,
     team_rest_days,
+    team_injuries,
+    team_news,
 )
 from lib.freshness import show_freshness_banner
 from lib.filters import window_picker, season_filter_picker, SEASON_FILTER_LABELS
@@ -180,6 +182,63 @@ with hdr:
         st.markdown(f"### 🏠 {home['full_name']}")
         st.markdown(f"Season `{wH}-{lH}`  ·  {window} `{wH_w}-{lH_w}`")
         st.caption(_rest_label(home_id, g["game_date"]))
+
+# =========================================================================
+# Injuries + news panel (Phase 7)
+# =========================================================================
+
+def _injury_status_emoji(status: str) -> str:
+    s = (status or "").lower()
+    if "out" in s or "suspended" in s:
+        return "🔴"
+    if "doubtful" in s:
+        return "🟠"
+    if "questionable" in s:
+        return "🟡"
+    if "day-to-day" in s:
+        return "🟢"
+    if "probable" in s:
+        return "🟢"
+    return "⚪"
+
+def _render_team_injuries_news(team_id: int, team_label: str):
+    inj = team_injuries(team_id, _mtime=mtime)
+    news = team_news(team_id, limit=5, _mtime=mtime)
+    st.markdown(f"#### {team_label}")
+
+    if inj.empty:
+        st.caption("✅ No injuries reported")
+    else:
+        # Compact 1-liners — emoji + name + status + detail
+        for _, row in inj.iterrows():
+            emoji = _injury_status_emoji(row["status"])
+            detail_part = f" · _{row['detail']}_" if row["detail"] else ""
+            st.markdown(
+                f"{emoji} **{row['player_name']}** — `{row['status']}`{detail_part}"
+            )
+
+    if news.empty:
+        st.caption("📰 _No recent news_")
+    else:
+        with st.expander(f"📰 Recent news ({len(news)})", expanded=False):
+            for _, art in news.iterrows():
+                cat = f"`{art['category']}` " if art["category"] else ""
+                date_str = (art["published_utc"] or "")[:10]
+                if art["url"]:
+                    st.markdown(f"{cat}**[{art['headline']}]({art['url']})** _({date_str})_")
+                else:
+                    st.markdown(f"{cat}**{art['headline']}** _({date_str})_")
+                if art["summary"]:
+                    st.caption(art["summary"])
+
+with st.container(border=True):
+    st.markdown("### 🚨 Injuries & News")
+    inj_cols = st.columns(2)
+    with inj_cols[0]:
+        _render_team_injuries_news(away_id, f"✈️ {away['full_name']}")
+    with inj_cols[1]:
+        _render_team_injuries_news(home_id, f"🏠 {home['full_name']}")
+    st.caption("Injuries refreshed every 4h via GitHub Actions · sourced from ESPN")
 
 # =========================================================================
 # League average baseline (used in Edge Finder and key metrics)

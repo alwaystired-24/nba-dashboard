@@ -16,6 +16,7 @@ from lib.data import (
     latest_loaded_date,
     team_aggregate,
     team_record,
+    all_team_injury_counts,
 )
 from lib.freshness import show_freshness_banner
 from lib.filters import season_filter_picker, SEASON_FILTER_LABELS
@@ -36,6 +37,8 @@ show_freshness_banner(mtime)
 season_filter = season_filter_picker()
 st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** form previews. "
             "Change at top of any page.")
+
+injury_counts = all_team_injury_counts(_mtime=mtime)
 
 # --- Range we want: yesterday, today, tomorrow, +5 more ----------------
 today = date.fromisoformat(hkt_today())
@@ -120,6 +123,23 @@ for label in seen_labels:
                         f"ORtg `{fmt_num(home_agg.get('off_rating'))}`  ·  "
                         f"DRtg `{fmt_num(home_agg.get('def_rating'))}`"
                     )
+
+                # Injury counts (Out/Doubtful/Suspended only — actionable)
+                away_inj = injury_counts.get(int(g["away_team_id"]), 0)
+                home_inj = injury_counts.get(int(g["home_team_id"]), 0)
+                if away_inj or home_inj:
+                    inj_parts = []
+                    if away_inj:
+                        emoji = "🚨" if away_inj >= 3 else "⚠️"
+                        inj_parts.append(f"{emoji} {g['away_abbr']}: {away_inj}")
+                    else:
+                        inj_parts.append(f"✅ {g['away_abbr']}: 0")
+                    if home_inj:
+                        emoji = "🚨" if home_inj >= 3 else "⚠️"
+                        inj_parts.append(f"{emoji} {g['home_abbr']}: {home_inj}")
+                    else:
+                        inj_parts.append(f"✅ {g['home_abbr']}: 0")
+                    st.caption("Injuries — " + "  ·  ".join(inj_parts))
 
                 meta = []
                 if g["season_type"] != "Regular":

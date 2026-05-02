@@ -22,6 +22,7 @@ from .demographics import (
     players_missing_demographics,
 )
 from .odds import run_odds_fetch, ensure_odds_schema
+from .espn import run_espn_fetch, ensure_espn_schema
 from .etl import (
     ingest_advanced_box,
     ingest_schedule,
@@ -104,6 +105,17 @@ def cmd_daily(args):
     except Exception as exc:
         print(f"(Skipped orphan odds rematch: {exc})")
 
+    # Fetch ESPN injuries + news (best-effort, non-fatal)
+    try:
+        with connect() as conn:
+            ensure_espn_schema(conn)
+            espn_res = run_espn_fetch(conn)
+        inj = espn_res["injuries"]
+        news = espn_res["news"]
+        print(f"ESPN: {inj['total_injuries']} injuries, {news['total_articles']} articles")
+    except Exception as exc:
+        print(f"(Skipped ESPN fetch: {exc})")
+
     return 0 if fail == 0 else 1
 
 
@@ -138,6 +150,33 @@ def cmd_odds_init(args):
     with connect() as conn:
         ensure_odds_schema(conn)
     print("Odds schema applied. You can now run `python -m scripts.run odds --phase manual` to test.")
+    return 0
+
+
+def cmd_espn(args):
+    """Fetch injuries + team news from ESPN."""
+    with connect() as conn:
+        ensure_espn_schema(conn)
+        try:
+            res = run_espn_fetch(conn)
+        except Exception as exc:
+            print(f"ESPN fetch failed: {exc}")
+            return 1
+    inj = res["injuries"]
+    news = res["news"]
+    print("ESPN fetch complete:")
+    print(f"  Injuries:  {inj['teams_fetched']}/30 teams ok, "
+           f"{inj['total_injuries']} injuries, {inj['teams_failed']} failed")
+    print(f"  News:      {news['teams_fetched']}/30 teams ok, "
+           f"{news['total_articles']} articles, {news['teams_failed']} failed")
+    return 0
+
+
+def cmd_espn_init(args):
+    """One-time: apply migration 003 only."""
+    with connect() as conn:
+        ensure_espn_schema(conn)
+    print("ESPN schema applied. Run `python -m scripts.run espn` to populate.")
     return 0
 
 
@@ -191,6 +230,9 @@ def main(argv=None):
     p.set_defaults(func=cmd_odds)
 
     sub.add_parser("odds_init", help="apply odds schema migration (one-time)").set_defaults(func=cmd_odds_init)
+
+    sub.add_parser("espn", help="fetch injuries + team news from ESPN").set_defaults(func=cmd_espn)
+    sub.add_parser("espn_init", help="apply ESPN schema migration (one-time)").set_defaults(func=cmd_espn_init)
 
     sub.add_parser("status", help="row counts + last run").set_defaults(func=cmd_status)
 

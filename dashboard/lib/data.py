@@ -584,6 +584,78 @@ def compute_player_ranks(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =========================================================================
+# INJURIES + TEAM NEWS (ESPN data)
+# =========================================================================
+
+@st.cache_data(show_spinner=False)
+def team_injuries(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
+    """Current injuries for a team. Empty DataFrame if no data."""
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            return pd.read_sql_query(
+                """
+                SELECT player_name, status, detail, return_date, fetched_utc
+                FROM injuries
+                WHERE team_id = ?
+                ORDER BY
+                    CASE status
+                        WHEN 'Out' THEN 1
+                        WHEN 'Out For Season' THEN 1
+                        WHEN 'Doubtful' THEN 2
+                        WHEN 'Questionable' THEN 3
+                        WHEN 'Day-To-Day' THEN 4
+                        WHEN 'Probable' THEN 5
+                        ELSE 6
+                    END,
+                    player_name
+                """,
+                conn, params=(team_id,),
+            )
+    except sqlite3.OperationalError:
+        return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
+def all_team_injury_counts(_mtime: float = 0.0) -> dict[int, int]:
+    """Return team_id -> count of injuries (Out/Doubtful only — not Probable/D-T-D).
+
+    Used for compact badges on Today page game cards.
+    """
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT team_id, COUNT(*) AS n
+                FROM injuries
+                WHERE status IN ('Out', 'Out For Season', 'Doubtful', 'Suspended')
+                GROUP BY team_id
+                """
+            ).fetchall()
+            return {r["team_id"]: r["n"] for r in rows}
+    except sqlite3.OperationalError:
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def team_news(team_id: int, limit: int = 5, _mtime: float = 0.0) -> pd.DataFrame:
+    """Latest news headlines for a team. Empty DataFrame if no data."""
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            return pd.read_sql_query(
+                """
+                SELECT headline, summary, category, published_utc, url
+                FROM team_news
+                WHERE team_id = ?
+                ORDER BY published_utc DESC
+                LIMIT ?
+                """,
+                conn, params=(team_id, limit),
+            )
+    except sqlite3.OperationalError:
+        return pd.DataFrame()
+
+
+# =========================================================================
 # REST DAYS — days since the team's last game
 # =========================================================================
 
