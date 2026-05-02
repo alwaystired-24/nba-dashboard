@@ -592,6 +592,7 @@ def team_injuries(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
     """Current injuries for a team. Empty DataFrame if no data."""
     try:
         with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             return pd.read_sql_query(
                 """
                 SELECT player_name, status, detail, return_date, fetched_utc
@@ -623,6 +624,7 @@ def all_team_injury_counts(_mtime: float = 0.0) -> dict[int, int]:
     """
     try:
         with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
                 SELECT team_id, COUNT(*) AS n
@@ -641,6 +643,7 @@ def team_news(team_id: int, limit: int = 5, _mtime: float = 0.0) -> pd.DataFrame
     """Latest news headlines for a team. Empty DataFrame if no data."""
     try:
         with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             return pd.read_sql_query(
                 """
                 SELECT headline, summary, category, published_utc, url
