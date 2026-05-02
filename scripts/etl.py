@@ -200,10 +200,24 @@ def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
             if opp_id is None:
                 continue
 
+            # Determine season_type from game_id prefix (most reliable)
+            # 0022=Regular, 0042=Playoffs, 0052=PlayIn, 0012/001=PreSeason
+            entry_season_type = _season_type_to_label(st)  # fallback from loop var
+            if gid and len(gid) >= 4:
+                pfx = gid[:4]
+                if pfx == "0042":
+                    entry_season_type = "Playoffs"
+                elif pfx == "0052":
+                    entry_season_type = "PlayIn"
+                elif pfx == "0022":
+                    entry_season_type = "Regular"
+                elif pfx == "0012" or gid.startswith("001"):
+                    entry_season_type = "PreSeason"
+
             entry = by_game.setdefault(gid, {
                 "game_id": gid,
                 "season": season,
-                "season_type": _season_type_to_label(st),
+                "season_type": entry_season_type,
                 "game_date": r["GAME_DATE"],
                 "game_datetime_et": None,
                 "home_team_id": None,
@@ -214,6 +228,10 @@ def ingest_schedule(conn: sqlite3.Connection, season: str | None = None) -> int:
                 "arena": None,
                 "attendance": None,
             })
+            # ALWAYS overwrite season_type if game_id prefix gives us better info
+            # (handles case where Step 1 set it wrong, or Step 2 found it under wrong loop iteration)
+            if gid and len(gid) >= 4 and gid[:4] in ("0042", "0052", "0022", "0012"):
+                entry["season_type"] = entry_season_type
             # Don't overwrite with worse data — only fill in if missing
             if entry.get("home_team_id") is None:
                 if is_home:
