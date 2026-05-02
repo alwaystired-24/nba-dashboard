@@ -1,0 +1,13 @@
+# NBA Dashboard — trader-feel dark theme
+# Deep navy base, amber accent, soft contrast
+
+[theme]
+base = "dark"
+primaryColor = "#F4A742"           # warm amber — for active widgets, links
+backgroundColor = "#0E1525"         # deep navy
+secondaryBackgroundColor = "#172033" # slightly lighter — sidebar, borders
+textColor = "#E5E9F0"               # warm off-white
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

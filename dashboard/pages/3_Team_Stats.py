@@ -170,63 +170,103 @@ for col, label, fn in specs:
 
 st.subheader(f"{layer} stats — {window}")
 st.caption(f"{len(df_view) - 1} teams + league avg row · ranks always vs full 30 teams.  "
-            "Click any column header to sort, click a row to drill in.")
+            "Click any column header to sort. Pick a team below to drill in.")
 
-event = st.dataframe(
-    df_view,
-    column_config=col_config,
-    hide_index=True,
-    width="stretch",
-    height=620,
-    on_select="rerun",
-    selection_mode="single-row",
-)
+# Render the table — colored if rank columns exist, plain otherwise
+if show_ranks:
+    # Build {value_col: rank_col} mapping for color helper
+    from lib.coloring import style_dataframe_by_ranks
+    rank_map = {}
+    for col, _, _ in specs:
+        if col in df_view.columns and f"{col}_rank" in df_view.columns:
+            rank_map[col] = f"{col}_rank"
+
+    # Drop team_id from display, but keep it for drilldown lookup
+    df_render = df_view.drop(columns=["team_id"])
+    styler = style_dataframe_by_ranks(df_render, rank_map, n_total=30)
+    st.dataframe(
+        styler,
+        column_config=col_config,
+        hide_index=True,
+        width="stretch",
+        height=620,
+    )
+    # Selectbox-based drilldown (Styler is incompatible with on_select)
+    st.markdown("**Drill into a team**")
+    team_options = ["—"] + [
+        f"{row['abbr']} · {row['team']}"
+        for _, row in df_view.iterrows()
+        if int(row["team_id"]) != -1
+    ]
+    chosen = st.selectbox("Pick a team", team_options, label_visibility="collapsed",
+                            key="ts_drill_select")
+    sel_team_id = None
+    if chosen != "—":
+        sel_abbr = chosen.split(" · ")[0]
+        match = df_view[df_view["abbr"] == sel_abbr]
+        if not match.empty:
+            sel_team_id = int(match.iloc[0]["team_id"])
+else:
+    # Plain table with row-click drilldown
+    event = st.dataframe(
+        df_view,
+        column_config=col_config,
+        hide_index=True,
+        width="stretch",
+        height=620,
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+    sel_rows = event.selection.rows if hasattr(event, "selection") else []
+    sel_team_id = None
+    if sel_rows:
+        row_idx = sel_rows[0]
+        row = df_view.iloc[row_idx]
+        if int(row["team_id"]) != -1:
+            sel_team_id = int(row["team_id"])
 
 # =========================================================================
 # DRILLDOWN
 # =========================================================================
-sel_rows = event.selection.rows if hasattr(event, "selection") else []
-if sel_rows:
-    row_idx = sel_rows[0]
-    row = df_view.iloc[row_idx]
-    if int(row["team_id"]) != -1:
-        team_id = int(row["team_id"])
-        team_name = row["team"]
+if sel_team_id is not None:
+    team_id = sel_team_id
+    team_row = df_view[df_view["team_id"] == team_id].iloc[0]
+    team_name = team_row["team"]
 
-        st.divider()
-        st.subheader(f"📋 {team_name} — last 20 games")
+    st.divider()
+    st.subheader(f"📋 {team_name} — last 20 games")
 
-        games = team_recent_games(team_id, last_n=20, season_filter=season_filter, _mtime=mtime)
-        if games.empty:
-            st.caption("No games found.")
-        else:
-            games = games.copy()
-            games["opp"] = games["opp_id"].map(
-                lambda x: tlookup.get(int(x), {}).get("abbreviation", "—")
-            )
-            games["score"] = games.apply(
-                lambda r: f"{int(r['pts'])}-{int(r['opp_pts'])}" if pd.notna(r["pts"]) else "—",
-                axis=1,
-            )
-            for c in ("fg_pct", "fg3_pct", "efg_pct", "ts_pct"):
-                if c in games.columns:
-                    games[c] = games[c] * 100
+    games = team_recent_games(team_id, last_n=20, season_filter=season_filter, _mtime=mtime)
+    if games.empty:
+        st.caption("No games found.")
+    else:
+        games = games.copy()
+        games["opp"] = games["opp_id"].map(
+            lambda x: tlookup.get(int(x), {}).get("abbreviation", "—")
+        )
+        games["score"] = games.apply(
+            lambda r: f"{int(r['pts'])}-{int(r['opp_pts'])}" if pd.notna(r["pts"]) else "—",
+            axis=1,
+        )
+        for c in ("fg_pct", "fg3_pct", "efg_pct", "ts_pct"):
+            if c in games.columns:
+                games[c] = games[c] * 100
 
-            drill_view = games[["game_date", "site", "opp", "score",
-                                 "off_rating", "def_rating", "net_rating", "pace",
-                                 "efg_pct", "ts_pct", "fg_pct", "fg3_pct"]]
-            drill_config = {
-                "game_date": st.column_config.TextColumn("Date"),
-                "site": st.column_config.TextColumn("H/A"),
-                "opp": st.column_config.TextColumn("OPP"),
-                "score": st.column_config.TextColumn("Score"),
-                "off_rating": st.column_config.NumberColumn("ORtg", format="%.1f"),
-                "def_rating": st.column_config.NumberColumn("DRtg", format="%.1f"),
-                "net_rating": st.column_config.NumberColumn("Net", format="%.1f"),
-                "pace": st.column_config.NumberColumn("Pace", format="%.1f"),
-                "efg_pct": st.column_config.NumberColumn("eFG%", format="%.1f"),
-                "ts_pct": st.column_config.NumberColumn("TS%", format="%.1f"),
-                "fg_pct": st.column_config.NumberColumn("FG%", format="%.1f"),
-                "fg3_pct": st.column_config.NumberColumn("3P%", format="%.1f"),
-            }
-            st.dataframe(drill_view, column_config=drill_config, hide_index=True, width="stretch")
+        drill_view = games[["game_date", "site", "opp", "score",
+                             "off_rating", "def_rating", "net_rating", "pace",
+                             "efg_pct", "ts_pct", "fg_pct", "fg3_pct"]]
+        drill_config = {
+            "game_date": st.column_config.TextColumn("Date"),
+            "site": st.column_config.TextColumn("H/A"),
+            "opp": st.column_config.TextColumn("OPP"),
+            "score": st.column_config.TextColumn("Score"),
+            "off_rating": st.column_config.NumberColumn("ORtg", format="%.1f"),
+            "def_rating": st.column_config.NumberColumn("DRtg", format="%.1f"),
+            "net_rating": st.column_config.NumberColumn("Net", format="%.1f"),
+            "pace": st.column_config.NumberColumn("Pace", format="%.1f"),
+            "efg_pct": st.column_config.NumberColumn("eFG%", format="%.1f"),
+            "ts_pct": st.column_config.NumberColumn("TS%", format="%.1f"),
+            "fg_pct": st.column_config.NumberColumn("FG%", format="%.1f"),
+            "fg3_pct": st.column_config.NumberColumn("3P%", format="%.1f"),
+        }
+        st.dataframe(drill_view, column_config=drill_config, hide_index=True, width="stretch")

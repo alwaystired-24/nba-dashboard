@@ -185,27 +185,65 @@ for col, label, fn in specs:
         )
 
 st.subheader(f"{layer} stats — {window}  ·  {len(df_view)} players")
-st.caption("Click any column header to sort. Click a row to see that player's last 20 games below.")
+st.caption("Click any column header to sort. Pick a player below to drill in.")
 
-event = st.dataframe(
-    df_view,
-    column_config=col_config,
-    hide_index=True,
-    width="stretch",
-    height=620,
-    on_select="rerun",
-    selection_mode="single-row",
-)
+if show_pcts:
+    # Build {value_col: pct_col} mapping
+    from lib.coloring import style_dataframe_by_percentiles
+    pct_map = {}
+    for col, _, _ in specs:
+        if col in df_view.columns and f"{col}_pct" in df_view.columns:
+            pct_map[col] = f"{col}_pct"
+
+    df_render = df_view.drop(columns=["player_id"])
+    styler = style_dataframe_by_percentiles(df_render, pct_map)
+    st.dataframe(
+        styler,
+        column_config=col_config,
+        hide_index=True,
+        width="stretch",
+        height=620,
+    )
+    # Selectbox drilldown
+    st.markdown("**Drill into a player**")
+    player_options = ["—"] + [
+        f"{row['player']} · {row['team']}"
+        for _, row in df_view.iterrows()
+    ]
+    chosen = st.selectbox("Pick a player", player_options, label_visibility="collapsed",
+                            key="ps_drill_select")
+    sel_player_id = None
+    if chosen != "—":
+        sel_player_name = chosen.split(" · ")[0]
+        match = df_view[df_view["player"] == sel_player_name]
+        if not match.empty:
+            sel_player_id = int(match.iloc[0]["player_id"])
+            sel_player_name_actual = match.iloc[0]["player"]
+else:
+    event = st.dataframe(
+        df_view,
+        column_config=col_config,
+        hide_index=True,
+        width="stretch",
+        height=620,
+        on_select="rerun",
+        selection_mode="single-row",
+    )
+    sel_rows = event.selection.rows if hasattr(event, "selection") else []
+    sel_player_id = None
+    sel_player_name_actual = None
+    if sel_rows:
+        row_idx = sel_rows[0]
+        row = df_view.iloc[row_idx]
+        sel_player_id = int(row["player_id"])
+        sel_player_name_actual = row["player"]
 
 # =========================================================================
 # DRILLDOWN
 # =========================================================================
-sel_rows = event.selection.rows if hasattr(event, "selection") else []
-if sel_rows:
-    row_idx = sel_rows[0]
-    row = df_view.iloc[row_idx]
-    player_id = int(row["player_id"])
-    player_name = row["player"]
+if sel_player_id is not None:
+    player_id = sel_player_id
+    player_name = sel_player_name_actual
 
     st.divider()
     st.subheader(f"📋 {player_name} — last 20 games")
