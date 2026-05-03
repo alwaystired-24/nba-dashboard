@@ -63,6 +63,15 @@ season_filter = season_filter_picker()
 st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** stats. "
             "Change at top of any page.")
 
+# View toggle: Table or Chart
+view_mode = st.radio(
+    "View",
+    options=["📊 Table", "📈 Chart"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="ps_view_mode",
+)
+
 # =========================================================================
 # SIDEBAR FILTERS
 # =========================================================================
@@ -207,58 +216,104 @@ for col, label, fn in specs:
         )
 
 st.subheader(f"{layer} stats — {window}  ·  {len(df_view)} players")
-st.caption("Click any column header to sort. Pick a player below to drill in.")
 
-if show_pcts:
-    # Build {value_col: pct_col} mapping
-    from lib.coloring import style_dataframe_by_percentiles
-    pct_map = {}
-    for col, _, _ in specs:
-        if col in df_view.columns and f"{col}_pct" in df_view.columns:
-            pct_map[col] = f"{col}_pct"
+# =========================================================================
+# RENDER: Table or Chart based on view_mode
+# =========================================================================
+sel_player_id = None
+sel_player_name_actual = None
 
-    df_render = df_view.drop(columns=["player_id"])
-    styler = style_dataframe_by_percentiles(df_render, pct_map)
-    st.dataframe(
-        styler,
-        column_config=col_config,
-        hide_index=True,
-        width="stretch",
-        height=620,
-    )
-    # Selectbox drilldown
-    st.markdown("**Drill into a player**")
-    player_options = ["—"] + [
-        f"{row['player']} · {row['team']}"
-        for _, row in df_view.iterrows()
-    ]
-    chosen = st.selectbox("Pick a player", player_options, label_visibility="collapsed",
-                            key="ps_drill_select")
-    sel_player_id = None
-    if chosen != "—":
-        sel_player_name = chosen.split(" · ")[0]
-        match = df_view[df_view["player"] == sel_player_name]
-        if not match.empty:
-            sel_player_id = int(match.iloc[0]["player_id"])
-            sel_player_name_actual = match.iloc[0]["player"]
-else:
-    event = st.dataframe(
-        df_view,
-        column_config=col_config,
-        hide_index=True,
-        width="stretch",
-        height=620,
-        on_select="rerun",
-        selection_mode="single-row",
-    )
-    sel_rows = event.selection.rows if hasattr(event, "selection") else []
-    sel_player_id = None
-    sel_player_name_actual = None
-    if sel_rows:
-        row_idx = sel_rows[0]
-        row = df_view.iloc[row_idx]
-        sel_player_id = int(row["player_id"])
-        sel_player_name_actual = row["player"]
+if view_mode == "📊 Table":
+    st.caption("Click any column header to sort. Pick a player below to drill in.")
+
+    # Column multi-select — choose which stat columns to display
+    from lib.charts import column_multiselect
+    visible_cols = column_multiselect(specs, key="ps_col_select")
+
+    keep_cols = ["player", "team", "player_id"]
+    for col in visible_cols:
+        if col in df_view.columns:
+            keep_cols.append(col)
+            if show_pcts and f"{col}_pct" in df_view.columns:
+                keep_cols.append(f"{col}_pct")
+    df_render = df_view[keep_cols].copy()
+
+    if show_pcts:
+        from lib.coloring import style_dataframe_by_percentiles
+        pct_map = {}
+        for col in visible_cols:
+            if col in df_render.columns and f"{col}_pct" in df_render.columns:
+                pct_map[col] = f"{col}_pct"
+
+        df_render_no_id = df_render.drop(columns=["player_id"])
+        styler = style_dataframe_by_percentiles(df_render_no_id, pct_map)
+        st.dataframe(
+            styler,
+            column_config=col_config,
+            hide_index=True,
+            width="stretch",
+            height=620,
+        )
+        # Selectbox drilldown
+        st.markdown("**Drill into a player**")
+        player_options = ["—"] + [
+            f"{row['player']} · {row['team']}"
+            for _, row in df_view.iterrows()
+        ]
+        chosen = st.selectbox("Pick a player", player_options, label_visibility="collapsed",
+                                key="ps_drill_select")
+        if chosen != "—":
+            sel_player_name = chosen.split(" · ")[0]
+            match = df_view[df_view["player"] == sel_player_name]
+            if not match.empty:
+                sel_player_id = int(match.iloc[0]["player_id"])
+                sel_player_name_actual = match.iloc[0]["player"]
+    else:
+        event = st.dataframe(
+            df_render,
+            column_config=col_config,
+            hide_index=True,
+            width="stretch",
+            height=620,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+        sel_rows = event.selection.rows if hasattr(event, "selection") else []
+        if sel_rows:
+            row_idx = sel_rows[0]
+            row = df_render.iloc[row_idx]
+            sel_player_id = int(row["player_id"])
+            sel_player_name_actual = row["player"]
+
+else:  # Chart view
+    from lib.charts import stat_picker, bar_chart
+
+    if df_view.empty:
+        st.info("No players available to chart with current filters.")
+    else:
+        # Cap to top 30 by chosen stat for readability
+        st.caption(f"Bar chart across filtered players (top 30 shown). "
+                    "Bars colored green→red by rank.")
+
+        chosen_stat = stat_picker(specs, default_col=specs[0][0], key="ps_chart_stat")
+        chosen_label = next((label for col, label, _ in specs if col == chosen_stat), chosen_stat)
+
+        # Build label = "Player (TEAM)" so duplicates resolve and team context shows
+        chart_df = df_view.copy()
+        chart_df["chart_label"] = chart_df.apply(
+            lambda r: f"{r['player']} ({r['team']})", axis=1
+        )
+
+        fig = bar_chart(
+            chart_df,
+            value_col=chosen_stat,
+            label_col="chart_label",
+            value_label=chosen_label,
+            lower_is_better=chosen_stat in LOWER_IS_BETTER,
+            max_bars=30,
+            format_str=".1f",
+        )
+        st.plotly_chart(fig, width="stretch")
 
 # =========================================================================
 # DRILLDOWN

@@ -47,6 +47,15 @@ season_filter = season_filter_picker()
 st.caption(f"Showing **{SEASON_FILTER_LABELS[season_filter]}** stats. "
             "Change at top of any page.")
 
+# View toggle: Table or Chart
+view_mode = st.radio(
+    "View",
+    options=["📊 Table", "📈 Chart"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="ts_view_mode",
+)
+
 # =========================================================================
 # SIDEBAR FILTERS
 # =========================================================================
@@ -191,61 +200,114 @@ for col, label, fn in specs:
         )
 
 st.subheader(f"{layer} stats — {window}")
-st.caption(f"{len(df_view) - 1} teams + league avg row · ranks always vs full 30 teams.  "
-            "Click any column header to sort. Pick a team below to drill in.")
 
-# Render the table — colored if rank columns exist, plain otherwise
-if show_ranks:
-    # Build {value_col: rank_col} mapping for color helper
-    from lib.coloring import style_dataframe_by_ranks
-    rank_map = {}
-    for col, _, _ in specs:
-        if col in df_view.columns and f"{col}_rank" in df_view.columns:
-            rank_map[col] = f"{col}_rank"
+# =========================================================================
+# RENDER: Table or Chart based on view_mode
+# =========================================================================
+sel_team_id = None  # will be set in Table view
 
-    # Drop team_id from display, but keep it for drilldown lookup
-    df_render = df_view.drop(columns=["team_id"])
-    styler = style_dataframe_by_ranks(df_render, rank_map, n_total=30)
-    st.dataframe(
-        styler,
-        column_config=col_config,
-        hide_index=True,
-        width="stretch",
-        height=620,
-    )
-    # Selectbox-based drilldown (Styler is incompatible with on_select)
-    st.markdown("**Drill into a team**")
-    team_options = ["—"] + [
-        f"{row['abbr']} · {row['team']}"
-        for _, row in df_view.iterrows()
-        if int(row["team_id"]) != -1
-    ]
-    chosen = st.selectbox("Pick a team", team_options, label_visibility="collapsed",
-                            key="ts_drill_select")
-    sel_team_id = None
-    if chosen != "—":
-        sel_abbr = chosen.split(" · ")[0]
-        match = df_view[df_view["abbr"] == sel_abbr]
-        if not match.empty:
-            sel_team_id = int(match.iloc[0]["team_id"])
-else:
-    # Plain table with row-click drilldown
-    event = st.dataframe(
-        df_view,
-        column_config=col_config,
-        hide_index=True,
-        width="stretch",
-        height=620,
-        on_select="rerun",
-        selection_mode="single-row",
-    )
-    sel_rows = event.selection.rows if hasattr(event, "selection") else []
-    sel_team_id = None
-    if sel_rows:
-        row_idx = sel_rows[0]
-        row = df_view.iloc[row_idx]
-        if int(row["team_id"]) != -1:
-            sel_team_id = int(row["team_id"])
+if view_mode == "📊 Table":
+    st.caption(f"{len(df_view) - 1} teams + league avg row · ranks always vs full 30 teams.  "
+                "Click any column header to sort. Pick a team below to drill in.")
+
+    # Column multi-select — choose which stat columns to display
+    from lib.charts import column_multiselect
+    visible_cols = column_multiselect(specs, key="ts_col_select")
+
+    # Filter df_view to visible columns + identity + rank columns
+    keep_cols = ["abbr", "team", "team_id"]
+    for col in visible_cols:
+        if col in df_view.columns:
+            keep_cols.append(col)
+            if show_ranks and f"{col}_rank" in df_view.columns:
+                keep_cols.append(f"{col}_rank")
+    df_render = df_view[keep_cols].copy()
+
+    # Render the table — colored if rank columns exist, plain otherwise
+    if show_ranks:
+        from lib.coloring import style_dataframe_by_ranks
+        rank_map = {}
+        for col in visible_cols:
+            if col in df_render.columns and f"{col}_rank" in df_render.columns:
+                rank_map[col] = f"{col}_rank"
+
+        df_render_no_id = df_render.drop(columns=["team_id"])
+        styler = style_dataframe_by_ranks(df_render_no_id, rank_map, n_total=30)
+        st.dataframe(
+            styler,
+            column_config=col_config,
+            hide_index=True,
+            width="stretch",
+            height=620,
+        )
+        # Selectbox-based drilldown (Styler is incompatible with on_select)
+        st.markdown("**Drill into a team**")
+        team_options = ["—"] + [
+            f"{row['abbr']} · {row['team']}"
+            for _, row in df_view.iterrows()
+            if int(row["team_id"]) != -1
+        ]
+        chosen = st.selectbox("Pick a team", team_options, label_visibility="collapsed",
+                                key="ts_drill_select")
+        if chosen != "—":
+            sel_abbr = chosen.split(" · ")[0]
+            match = df_view[df_view["abbr"] == sel_abbr]
+            if not match.empty:
+                sel_team_id = int(match.iloc[0]["team_id"])
+    else:
+        # Plain table with row-click drilldown
+        event = st.dataframe(
+            df_render,
+            column_config=col_config,
+            hide_index=True,
+            width="stretch",
+            height=620,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+        sel_rows = event.selection.rows if hasattr(event, "selection") else []
+        if sel_rows:
+            row_idx = sel_rows[0]
+            row = df_render.iloc[row_idx]
+            if int(row["team_id"]) != -1:
+                sel_team_id = int(row["team_id"])
+
+else:  # Chart view
+    from lib.charts import stat_picker, bar_chart
+
+    # Drop the league avg row from the chart (it would dominate ordering oddly)
+    chart_df = df_view[df_view["team_id"] != -1].copy()
+    if chart_df.empty:
+        st.info("No teams available to chart with current filters.")
+    else:
+        st.caption(f"Bar chart across {len(chart_df)} team(s). "
+                    "Bars colored green→red by rank. League avg shown as dashed line.")
+
+        # Stat picker
+        chosen_stat = stat_picker(specs, default_col=specs[0][0], key="ts_chart_stat")
+        # Get the formatter for this stat to choose number format
+        chosen_label = next((label for col, label, _ in specs if col == chosen_stat), chosen_stat)
+        chosen_fmt = next((fn for col, _, fn in specs if col == chosen_stat), fmt_num)
+        format_str = ".1f"
+
+        # League avg line position
+        league_avg = None
+        lg_match = df_view[df_view["team_id"] == -1]
+        if not lg_match.empty and chosen_stat in lg_match.columns:
+            v = lg_match.iloc[0][chosen_stat]
+            if pd.notna(v):
+                league_avg = float(v)
+
+        fig = bar_chart(
+            chart_df,
+            value_col=chosen_stat,
+            label_col="abbr",
+            value_label=chosen_label,
+            lower_is_better=chosen_stat in LOWER_IS_BETTER,
+            highlight_avg=league_avg,
+            format_str=format_str,
+        )
+        st.plotly_chart(fig, width="stretch")
 
 # =========================================================================
 # DRILLDOWN
