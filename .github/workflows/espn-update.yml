@@ -14,10 +14,10 @@ jobs:
     timeout-minutes: 8
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -30,7 +30,14 @@ jobs:
         run: python -m scripts.run espn_init
 
       - name: Fetch ESPN data
-        run: python -m scripts.run espn
+        run: |
+          set -e  # exit on any error
+          python -m scripts.run espn 2>&1 | tee /tmp/espn-output.log
+          # If the previous command exited 0 but printed an error, also fail
+          if grep -qi "fetch failed\|traceback" /tmp/espn-output.log; then
+            echo "::error::ESPN fetch reported errors"
+            exit 1
+          fi
 
       - name: Commit DB if changed
         run: |
@@ -42,5 +49,16 @@ jobs:
           else
             STAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
             git commit -m "ESPN update: $STAMP"
-            git push
+            # Retry-on-conflict loop: if another workflow pushed first, rebase + retry
+            for i in 1 2 3; do
+              if git push; then
+                echo "Pushed on attempt $i"
+                exit 0
+              fi
+              echo "Push failed (attempt $i), pulling + retrying..."
+              git pull --rebase --strategy-option=theirs
+              sleep $((i * 3))
+            done
+            echo "::error::Failed to push after 3 attempts"
+            exit 1
           fi

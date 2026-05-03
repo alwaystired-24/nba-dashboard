@@ -35,7 +35,7 @@ jobs:
       THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Determine phase from cron
         id: phase
@@ -54,7 +54,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -82,5 +82,15 @@ jobs:
             echo "No changes — skipping commit."
           else
             git commit -m "Odds update: ${{ steps.phase.outputs.value }} $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
+            for i in 1 2 3; do
+              if git push; then
+                echo "Pushed on attempt $i"
+                exit 0
+              fi
+              echo "Push failed (attempt $i), pulling + retrying..."
+              git pull --rebase --strategy-option=theirs
+              sleep $((i * 3))
+            done
+            echo "::error::Failed to push after 3 attempts"
+            exit 1
           fi
