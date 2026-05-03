@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+
 from lib.data import (
     db_mtime,
     games_in_window,
@@ -43,6 +44,9 @@ from lib.format import (
 )
 
 st.set_page_config(page_title="Matchup", page_icon="🥊", layout="wide")
+
+from lib.theme import inject_theme
+inject_theme(active_page="matchup")
 st.title("🥊 Matchup")
 
 mtime = db_mtime()
@@ -711,7 +715,7 @@ with st.expander(f"📋 Head-to-head this season — {away['abbreviation']} vs {
 
 
 # =========================================================================
-# ODDS — Phase 6 — three tables, raw decimal prices, opener/pre_game/late
+# ODDS — Phase 6 — three tables, raw decimal prices, opening/pre_game/closing
 # =========================================================================
 from lib.odds_data import odds_for_game
 
@@ -724,11 +728,11 @@ if odds_df.empty:
     st.info(
         "No odds data captured for this game yet. "
         "Odds are fetched 3× daily by the GitHub Actions workflow "
-        "(opener / pre_game / late). Check back closer to tip-off."
+        "(opening / pre_game / closing). Check back closer to tip-off."
     )
 else:
     # Detect missing phases (until system has been running 3 full days)
-    PHASES = ["opener", "pre_game", "late"]
+    PHASES = ["opening", "pre_game", "closing"]
     captured_phases = set(odds_df["snapshot_phase"].dropna().unique())
     missing = [p for p in PHASES if p not in captured_phases]
     if missing:

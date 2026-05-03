@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pandas as pd
 import streamlit as st
 
+
 from lib.data import db_mtime, league_team_table, team_lookup, team_recent_games
 from lib.freshness import show_freshness_banner
 from lib.filters import layer_picker, window_picker, season_filter_picker, SEASON_FILTER_LABELS
@@ -16,6 +17,9 @@ from lib.format import fmt_num, fmt_pct
 from lib.stats import team_layer_columns
 
 st.set_page_config(page_title="Team Stats", page_icon="🏟️", layout="wide")
+
+from lib.theme import inject_theme
+inject_theme(active_page="teamstats")
 st.title("🏟️ Team Stats")
 
 mtime = db_mtime()

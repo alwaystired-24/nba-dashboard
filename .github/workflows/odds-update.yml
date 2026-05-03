@@ -9,15 +9,21 @@ on:
         default: 'manual'
         type: choice
         options:
-          - opener
+          - opening
           - pre_game
           - late
           - manual
   schedule:
-    # All times in UTC. Comments show HKT equivalent.
-    - cron: '0 14 * * *'   # 22:00 HKT  → opener
-    - cron: '30 23 * * *'  # 07:30 HKT next day → pre_game
-    - cron: '0 4 * * *'    # 12:00 HKT → late
+    # 8 slots/day in HKT, 2 markets each (spreads + totals) = 16 credits/day = 496/month.
+    # All times in UTC. HKT comments are for reference only.
+    - cron: '30 16 * * *'   # HKT 00:30 (prev day) → opening
+    - cron: '0 19 * * *'    # HKT 03:00 (prev day) → pre_game
+    - cron: '0 23 * * *'    # HKT 07:00 (prev day) → pre_game
+    - cron: '30 0 * * *'    # HKT 08:30 → pre_game
+    - cron: '30 1 * * *'    # HKT 09:30 → pre_game
+    - cron: '30 2 * * *'    # HKT 10:30 → pre_game
+    - cron: '30 3 * * *'    # HKT 11:30 → pre_game
+    - cron: '0 8 * * *'     # HKT 16:00 → closing
 
 jobs:
   fetch:
@@ -34,16 +40,16 @@ jobs:
       - name: Determine phase from cron
         id: phase
         run: |
-          # Manual run uses input; scheduled runs derive from current UTC hour
+          # Manual run uses input; scheduled runs derive from current UTC hour:minute
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "value=${{ github.event.inputs.phase }}" >> "$GITHUB_OUTPUT"
           else
-            HOUR=$(date -u +%H)
-            case "$HOUR" in
-              14) echo "value=opener" >> "$GITHUB_OUTPUT" ;;
-              23) echo "value=pre_game" >> "$GITHUB_OUTPUT" ;;
-              04) echo "value=late" >> "$GITHUB_OUTPUT" ;;
-              *)  echo "value=manual" >> "$GITHUB_OUTPUT" ;;
+            HM=$(date -u +%H%M)
+            case "$HM" in
+              1630) echo "value=opening"   >> "$GITHUB_OUTPUT" ;;
+              0800) echo "value=closing"     >> "$GITHUB_OUTPUT" ;;
+              1900|2300|0030|0130|0230|0330) echo "value=pre_game" >> "$GITHUB_OUTPUT" ;;
+              *)    echo "value=manual"   >> "$GITHUB_OUTPUT" ;;
             esac
           fi
 
@@ -56,8 +62,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run odds fetch
-        run: python -m scripts.run odds --phase ${{ steps.phase.outputs.value }}
+      - name: Run odds fetch (spreads + totals only — moneyline dropped to fit 500 cred/mo budget)
+        run: python -m scripts.run odds --phase ${{ steps.phase.outputs.value }} --markets spreads,totals
 
       - name: Verify DB modified
         run: |

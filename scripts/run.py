@@ -131,7 +131,8 @@ def cmd_odds(args):
     with connect() as conn:
         ensure_odds_schema(conn)
         try:
-            summary = run_odds_fetch(conn, phase=args.phase)
+            summary = run_odds_fetch(conn, phase=args.phase,
+                                       markets=getattr(args, "markets", None))
         except Exception as exc:
             print(f"Odds fetch failed: {exc}")
             return 1
@@ -225,8 +226,11 @@ def main(argv=None):
 
     p = sub.add_parser("odds", help="fetch current NBA odds from The Odds API")
     p.add_argument("--phase", default="manual",
-                    choices=["opener", "pre_game", "late", "manual"],
+                    choices=["opening", "pre_game", "closing", "manual"],
                     help="snapshot phase tag for the rows we insert")
+    p.add_argument("--markets", default=None,
+                    help="comma-separated markets, default 'h2h,spreads,totals'. "
+                         "Use 'spreads,totals' to skip moneyline (cheaper).")
     p.set_defaults(func=cmd_odds)
 
     sub.add_parser("odds_init", help="apply odds schema migration (one-time)").set_defaults(func=cmd_odds_init)

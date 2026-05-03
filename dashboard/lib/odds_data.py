@@ -14,7 +14,7 @@ from .data import DB_PATH
 def odds_for_game(game_id: str, _mtime: float) -> pd.DataFrame:
     """Return all odds snapshots for a game, sorted by phase + book + market.
 
-    Includes opener / pre_game / late phases. Returns empty DataFrame
+    Includes opening / pre_game / closing phases. Returns empty DataFrame
     if no odds exist for the game (or odds_snapshots table is empty).
     """
     if not game_id:
@@ -31,9 +31,9 @@ def odds_for_game(game_id: str, _mtime: float) -> pd.DataFrame:
                 WHERE game_id = ?
                 ORDER BY
                     CASE snapshot_phase
-                        WHEN 'opener'   THEN 1
+                        WHEN 'opening'   THEN 1
                         WHEN 'pre_game' THEN 2
-                        WHEN 'late'     THEN 3
+                        WHEN 'closing'     THEN 3
                         ELSE 4
                     END,
                     bookmaker, market

@@ -6,7 +6,7 @@ Configuration via env vars:
     ODDS_REGIONS      — optional, default 'us'
 
 Schedule (HKT, runs via GitHub Actions):
-    opener    22:00 HKT  (14:00 UTC)
+    opening   22:00 HKT  (14:00 UTC)
     pre_game  07:30 HKT  (23:30 UTC prev day)
     late      12:00 HKT  (04:00 UTC)
 """
@@ -28,7 +28,7 @@ DEFAULT_MARKETS = "h2h,spreads,totals"
 DEFAULT_BOOKMAKERS = "draftkings,fanduel"
 DEFAULT_REGIONS = "us"
 DEFAULT_ODDS_FORMAT = "decimal"
-VALID_PHASES = {"opener", "pre_game", "late", "manual"}
+VALID_PHASES = {"opening", "pre_game", "closing", "manual"}
 
 
 def _api_key() -> str:
@@ -45,15 +45,15 @@ def detect_phase_from_now() -> str:
     """Auto-detect snapshot phase from current UTC hour.
 
     UTC mapping (matches GitHub Actions cron times):
-        13–17 UTC  -> opener      (~21–01 HKT)
+        13–17 UTC  -> opening      (~21–01 HKT)
         22–02 UTC  -> pre_game    (~06–10 HKT)
         03–06 UTC  -> late        (~11–14 HKT)
         else       -> manual
     """
     h = datetime.now(timezone.utc).hour
-    if 13 <= h < 18:    return "opener"
+    if 13 <= h < 18:    return "opening"
     if 22 <= h or h < 3: return "pre_game"
-    if 3 <= h < 7:      return "late"
+    if 3 <= h < 7:      return "closing"
     return "manual"
 
 
@@ -95,11 +95,57 @@ def _safe_int(x: Any) -> int | None:
         return None
 
 
+def _derive_phase_for_event(commence_iso: str | None,
+                              snapshot_iso: str,
+                              caller_phase: str) -> str | None:
+    """Derive the correct phase for ONE event based on time-to-tip.
+
+    Returns:
+        - "opening"  if game is >12 hours away
+        - "pre_game" if game is 0.5-12 hours away
+        - "closing"    if game is <30 min away (or up to tip-time)
+        - None      if game is already in progress / done — we should NOT store
+                    the row (it would be live or stale post-game data).
+
+    If caller_phase is "manual", we skip the time check entirely and just
+    return "manual" so test runs always store data.
+    """
+    if caller_phase == "manual":
+        return "manual"
+    if not commence_iso:
+        # Can't compute → fall back to whatever the slot was tagged as
+        return caller_phase
+
+    try:
+        commence_dt = datetime.fromisoformat(commence_iso.replace("Z", "+00:00"))
+        snapshot_dt = datetime.fromisoformat(snapshot_iso.replace("Z", "+00:00"))
+    except Exception:
+        return caller_phase
+
+    hours_until = (commence_dt - snapshot_dt).total_seconds() / 3600.0
+    if hours_until > 12:
+        return "opening"
+    if hours_until > 0.5:
+        return "pre_game"
+    if hours_until >= 0:
+        return "closing"
+    # Game has started or finished — don't store this snapshot
+    return None
+
+
 def parse_events(events: list[dict], snapshot_phase: str,
                   fetched_utc: str) -> tuple[list[dict], list[dict]]:
-    """Returns (snapshot_rows, mapping_rows)."""
+    """Returns (snapshot_rows, mapping_rows).
+
+    snapshot_phase from the caller is treated as a fallback / hint — actual phase
+    stored per event is derived from (commence_time - fetched_utc) so that:
+      - A 16:00 HKT snapshot of a game tipping in 14h gets 'opening'
+      - A 11:30 HKT snapshot of a game tipping in 20min gets 'closing'
+      - A 09:30 HKT snapshot of a 09:00 HKT game (already started) is SKIPPED
+    """
     snapshot_rows: list[dict] = []
     mapping_rows: list[dict] = []
+    skipped_in_progress = 0
 
     for ev in events:
         event_id = str(ev.get("id", ""))
@@ -109,6 +155,12 @@ def parse_events(events: list[dict], snapshot_phase: str,
         home = ev.get("home_team", "")
         away = ev.get("away_team", "")
         game_date = (commence[:10] if commence else None)
+
+        # Per-event phase — None means game is already in progress or finished
+        per_event_phase = _derive_phase_for_event(commence, fetched_utc, snapshot_phase)
+        if per_event_phase is None:
+            skipped_in_progress += 1
+            continue
 
         mapping_rows.append({
             "event_id": event_id,
@@ -128,15 +180,19 @@ def parse_events(events: list[dict], snapshot_phase: str,
                     continue
                 row.update({
                     "event_id": event_id,
-                    "snapshot_phase": snapshot_phase,
+                    "snapshot_phase": per_event_phase,
                     "fetched_utc": fetched_utc,
                     "commence_time_utc": commence,
                     "game_date": game_date,
                     "bookmaker": book_key,
                     "market": m_key,
-                    "is_closing": 1 if snapshot_phase == "late" else 0,
+                    "is_closing": 1 if per_event_phase == "closing" else 0,
                 })
                 snapshot_rows.append(row)
+
+    if skipped_in_progress:
+        logger.info("Skipped %d in-progress/finished events at this snapshot",
+                     skipped_in_progress)
 
     return snapshot_rows, mapping_rows
 
@@ -380,14 +436,18 @@ def rematch_orphan_events(conn: sqlite3.Connection) -> dict:
     }
 
 
-def run_odds_fetch(conn: sqlite3.Connection, phase: str | None = None) -> dict:
+def run_odds_fetch(conn: sqlite3.Connection, phase: str | None = None,
+                    markets: str | None = None) -> dict:
     if phase in (None, "auto"):
         phase = detect_phase_from_now()
     if phase not in VALID_PHASES:
         raise ValueError(f"Invalid phase: {phase}. Valid: {VALID_PHASES}")
 
     fetched_utc = datetime.now(timezone.utc).isoformat()
-    events, usage = fetch_odds()
+    if markets:
+        events, usage = fetch_odds(markets=markets)
+    else:
+        events, usage = fetch_odds()
     snap_rows, map_rows = parse_events(events, phase, fetched_utc)
     ensure_odds_schema(conn)
     n_snap, n_map = store_snapshots(conn, snap_rows, map_rows)

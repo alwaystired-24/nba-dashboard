@@ -10,6 +10,7 @@ from pathlib import Path
 
 import streamlit as st
 
+
 from lib.data import DB_PATH, db_mtime, latest_loaded_date
 from lib.filters import season_filter_picker, SEASON_FILTER_LABELS
 from lib.format import HKT, hkt_now_label
@@ -21,6 +22,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+from lib.theme import inject_theme
+inject_theme(active_page="home")
 
 st.title("🏀 NBA Dashboard")
 st.caption("Post-game trend analysis · podcast prep · odds compilation")
