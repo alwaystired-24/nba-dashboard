@@ -11,19 +11,24 @@ on:
         options:
           - opening
           - pre_game
-          - late
+          - closing
           - manual
-  schedule:
-    # 8 slots/day in HKT, 2 markets each (spreads + totals) = 16 credits/day = 496/month.
-    # All times in UTC. HKT comments are for reference only.
-    - cron: '30 16 * * *'   # HKT 00:30 (prev day) → opening
-    - cron: '0 19 * * *'    # HKT 03:00 (prev day) → pre_game
-    - cron: '0 23 * * *'    # HKT 07:00 (prev day) → pre_game
-    - cron: '30 0 * * *'    # HKT 08:30 → pre_game
-    - cron: '30 1 * * *'    # HKT 09:30 → pre_game
-    - cron: '30 2 * * *'    # HKT 10:30 → pre_game
-    - cron: '30 3 * * *'    # HKT 11:30 → pre_game
-    - cron: '0 8 * * *'     # HKT 16:00 → closing
+  # NOTE: GitHub-native cron schedule REMOVED — odds are triggered exclusively
+  # by Cron-job.org calling this workflow's dispatch endpoint. Cron-job.org has
+  # SLAs that GitHub Actions free tier does not. If you ever want to re-enable
+  # GitHub-native cron as a backup, uncomment the schedule block below — but
+  # be aware that running both simultaneously may double-charge your Odds API
+  # credits since calls separated by >5 minutes won't be deduplicated.
+  #
+  # schedule:
+  #   - cron: '30 16 * * *'   # HKT 00:30 → opening
+  #   - cron: '0 19 * * *'    # HKT 03:00 → pre_game
+  #   - cron: '0 23 * * *'    # HKT 07:00 → pre_game
+  #   - cron: '30 0 * * *'    # HKT 08:30 → pre_game
+  #   - cron: '30 1 * * *'    # HKT 09:30 → pre_game
+  #   - cron: '30 2 * * *'    # HKT 10:30 → pre_game
+  #   - cron: '30 3 * * *'    # HKT 11:30 → pre_game
+  #   - cron: '0 8 * * *'     # HKT 16:00 → closing
 
 jobs:
   fetch:
@@ -31,23 +36,31 @@ jobs:
     permissions:
       contents: write
     timeout-minutes: 10
+    # Concurrency: if Cron-job.org and GitHub native cron both fire at the same
+    # UTC minute, the older run is killed and the newer trigger runs. Net result:
+    # ONE snapshot stored, ONE API credit spent. No double-counting.
+    concurrency:
+      group: odds-fetch
+      cancel-in-progress: true
     env:
       THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
 
-      - name: Determine phase from cron
+      - name: Determine phase
         id: phase
         run: |
-          # Manual run uses input; scheduled runs derive from current UTC hour:minute
+          # workflow_dispatch (Cron-job.org or manual): use input phase directly.
+          # The fallback case-statement below is dead code unless the GitHub-native
+          # cron schedule is re-enabled in the on: block above.
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "value=${{ github.event.inputs.phase }}" >> "$GITHUB_OUTPUT"
           else
             HM=$(date -u +%H%M)
             case "$HM" in
-              1630) echo "value=opening"   >> "$GITHUB_OUTPUT" ;;
-              0800) echo "value=closing"     >> "$GITHUB_OUTPUT" ;;
+              1630) echo "value=opening"  >> "$GITHUB_OUTPUT" ;;
+              0800) echo "value=closing"  >> "$GITHUB_OUTPUT" ;;
               1900|2300|0030|0130|0230|0330) echo "value=pre_game" >> "$GITHUB_OUTPUT" ;;
               *)    echo "value=manual"   >> "$GITHUB_OUTPUT" ;;
             esac
