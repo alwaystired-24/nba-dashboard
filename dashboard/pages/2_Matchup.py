@@ -715,138 +715,203 @@ with st.expander(f"📋 Head-to-head this season — {away['abbreviation']} vs {
 
 
 # =========================================================================
-# ODDS — Phase 6 — three tables, raw decimal prices, opening/pre_game/closing
+# ODDS — Goaloo-style compact view: open + latest, expandable for full phases
 # =========================================================================
-from lib.odds_data import odds_for_game
+from lib.odds_data import odds_for_game, odds_compact_view
 
 st.divider()
 st.subheader("💰 Odds")
 
-odds_df = odds_for_game(g["game_id"], _mtime=mtime)
+compact = odds_compact_view(g["game_id"], _mtime=mtime)
 
-if odds_df.empty:
+if not compact:
     st.info(
         "No odds data captured for this game yet. "
-        "Odds are fetched 3× daily by the GitHub Actions workflow "
-        "(opening / pre_game / closing). Check back closer to tip-off."
+        "Odds are fetched 8× daily by the GitHub Actions workflow. "
+        "Check back closer to tip-off."
     )
 else:
-    # Detect missing phases (until system has been running 3 full days)
-    PHASES = ["opening", "pre_game", "closing"]
-    captured_phases = set(odds_df["snapshot_phase"].dropna().unique())
-    missing = [p for p in PHASES if p not in captured_phases]
-    if missing:
-        st.warning(
-            f"⚠️ Partial data — only captured: **{', '.join(sorted(captured_phases)) or 'none'}**. "
-            f"Missing: **{', '.join(missing)}**. "
-            "This is normal until the system has run 3+ days. "
-            "Empty cells (—) below indicate phases not yet collected.",
-            icon="⏳",
+    def _fmt_price(x):
+        if x is None or pd.isna(x):
+            return "—"
+        return f"{x:.2f}"
+
+    def _fmt_line(x, plus_sign=False):
+        if x is None or pd.isna(x):
+            return "—"
+        if plus_sign:
+            return f"{x:+g}"
+        return f"{x:g}"
+
+    def _fmt_time(iso_utc: str | None) -> str:
+        if not iso_utc:
+            return "—"
+        # ISO 2026-05-03T14:30:00+00:00 → display "May 03 14:30 UTC"
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
+            return dt.strftime("%b %d %H:%M UTC")
+        except Exception:
+            return iso_utc[:16]
+
+    def _movement_badge(open_val, latest_val, lower_is_better: bool = False) -> str:
+        """Return colored arrow if line moved. Color reflects direction.
+        For spreads (home perspective): negative spread = home favored more.
+        For totals: higher = more points expected.
+        """
+        if open_val is None or latest_val is None or pd.isna(open_val) or pd.isna(latest_val):
+            return ""
+        diff = latest_val - open_val
+        if abs(diff) < 0.01:
+            return ""
+        # Format: +0.5 or -1.0
+        sign = "+" if diff > 0 else ""
+        color = "#5FBE85" if diff > 0 else "#E37070"
+        arrow = "▲" if diff > 0 else "▼"
+        return (
+            f'<span style="color:{color};font-weight:500;font-size:11px;">'
+            f'{arrow} {sign}{diff:.1f}</span>'
         )
 
-    # Helper: pivot odds_df to {(book, phase): row} for fast lookup per market
-    def _phase_lookup(df_market: pd.DataFrame) -> dict:
-        """For one market's df, return {(book, phase): latest_row_in_that_phase}."""
-        out = {}
-        # If multiple snapshots exist for same (book, phase), take the most recent
-        df_market = df_market.sort_values("fetched_utc")
-        for (book, phase), grp in df_market.groupby(["bookmaker", "snapshot_phase"]):
-            out[(book, phase)] = grp.iloc[-1]
-        return out
+    def _market_row(market_key: str, label: str, has_line: bool):
+        """Render one row per market: book name, open, latest, movement, expand."""
+        info = compact.get(market_key)
+        if info is None:
+            st.markdown(
+                f'<div style="background:#172033;border-radius:8px;padding:12px 16px;'
+                f'margin-bottom:8px;color:#8B95A8;">'
+                f'<strong>{label}</strong> — no data captured</div>',
+                unsafe_allow_html=True,
+            )
+            return
 
-    def _fmt(x, pat="{:.2f}"):
-        if x is None or pd.isna(x):
-            return "—"
-        return pat.format(x)
+        book = info["book"].upper()
+        op = info["open"]
+        lt = info["latest"]
+        n_phases = info["n_phases"]
+        moved = info["moved"]
 
-    def _fmt_pt(x):
-        if x is None or pd.isna(x):
-            return "—"
-        return f"{x:+g}" if x else "0"
+        # Build the open + latest cells
+        if has_line:
+            # Spread or total — show line + price
+            if market_key == "spreads":
+                open_line_str = f"{home['abbreviation']} {_fmt_line(op['line'], plus_sign=True)}"
+                latest_line_str = f"{home['abbreviation']} {_fmt_line(lt['line'], plus_sign=True)}"
+                line_movement = _movement_badge(op["line"], lt["line"])
+            else:  # totals
+                open_line_str = _fmt_line(op["line"])
+                latest_line_str = _fmt_line(lt["line"])
+                line_movement = _movement_badge(op["line"], lt["line"])
+            home_label = away["abbreviation"] if market_key == "spreads" else "O"
+            away_label = home["abbreviation"] if market_key == "spreads" else "U"
 
-    # ---------------------------------------------------------------
-    # Moneyline table
-    # ---------------------------------------------------------------
-    st.markdown("#### Moneyline")
-    h2h_df = odds_df[odds_df["market"] == "h2h"]
-    if h2h_df.empty:
-        st.caption("No moneyline data captured.")
-    else:
-        lookup = _phase_lookup(h2h_df)
-        books = sorted(h2h_df["bookmaker"].unique())
-        rows = []
-        for book in books:
-            row = {"Book": book.upper()}
-            for phase in PHASES:
-                r = lookup.get((book, phase))
-                if r is None:
-                    row[f"{phase} · {away['abbreviation']}"] = "—"
-                    row[f"{phase} · {home['abbreviation']}"] = "—"
-                else:
-                    row[f"{phase} · {away['abbreviation']}"] = _fmt(r["away_price"])
-                    row[f"{phase} · {home['abbreviation']}"] = _fmt(r["home_price"])
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+            open_prices = (
+                f'<span style="color:#8B95A8;font-size:11px;">'
+                f'{home_label} {_fmt_price(op["away_price"])} · {away_label} {_fmt_price(op["home_price"])}</span>'
+            )
+            latest_prices = (
+                f'<span style="color:#8B95A8;font-size:11px;">'
+                f'{home_label} {_fmt_price(lt["away_price"])} · {away_label} {_fmt_price(lt["home_price"])}</span>'
+            )
+        else:
+            # Moneyline: just home/away prices, no line
+            open_line_str = ""
+            latest_line_str = ""
+            line_movement = ""
+            open_prices = (
+                f'<span>'
+                f'{away["abbreviation"]} <strong style="color:#E5E9F0;">{_fmt_price(op["away_price"])}</strong> · '
+                f'{home["abbreviation"]} <strong style="color:#E5E9F0;">{_fmt_price(op["home_price"])}</strong></span>'
+            )
+            latest_prices = (
+                f'<span>'
+                f'{away["abbreviation"]} <strong style="color:#E5E9F0;">{_fmt_price(lt["away_price"])}</strong> · '
+                f'{home["abbreviation"]} <strong style="color:#E5E9F0;">{_fmt_price(lt["home_price"])}</strong></span>'
+            )
 
-    # ---------------------------------------------------------------
-    # Spread table
-    # ---------------------------------------------------------------
-    st.markdown("#### Spread")
-    sp_df = odds_df[odds_df["market"] == "spreads"]
-    if sp_df.empty:
-        st.caption("No spread data captured.")
-    else:
-        lookup = _phase_lookup(sp_df)
-        books = sorted(sp_df["bookmaker"].unique())
-        rows = []
-        for book in books:
-            row = {"Book": book.upper()}
-            for phase in PHASES:
-                r = lookup.get((book, phase))
-                if r is None:
-                    row[f"{phase} · line"] = "—"
-                    row[f"{phase} · {away['abbreviation']} px"] = "—"
-                    row[f"{phase} · {home['abbreviation']} px"] = "—"
-                else:
-                    # Show line as home perspective (e.g., LAL -4.5)
-                    spread_h = r["spread_home"]
-                    if pd.notna(spread_h):
-                        row[f"{phase} · line"] = f"{home['abbreviation']} {spread_h:+g}"
-                    else:
-                        row[f"{phase} · line"] = "—"
-                    row[f"{phase} · {away['abbreviation']} px"] = _fmt(r["away_price"])
-                    row[f"{phase} · {home['abbreviation']} px"] = _fmt(r["home_price"])
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        # Compose: [Market] [Book]   Open: line + prices · time   |  Latest: line + prices · time   movement
+        moved_indicator = (
+            ' <span style="color:#F4A742;font-size:10px;margin-left:4px;">●</span>'
+            if moved else ""
+        )
 
-    # ---------------------------------------------------------------
-    # Total table
-    # ---------------------------------------------------------------
-    st.markdown("#### Total")
-    tot_df = odds_df[odds_df["market"] == "totals"]
-    if tot_df.empty:
-        st.caption("No total data captured.")
-    else:
-        lookup = _phase_lookup(tot_df)
-        books = sorted(tot_df["bookmaker"].unique())
-        rows = []
-        for book in books:
-            row = {"Book": book.upper()}
-            for phase in PHASES:
-                r = lookup.get((book, phase))
-                if r is None:
-                    row[f"{phase} · line"] = "—"
-                    row[f"{phase} · O px"] = "—"
-                    row[f"{phase} · U px"] = "—"
-                else:
-                    line = r["total_line"]
-                    row[f"{phase} · line"] = f"{line:g}" if pd.notna(line) else "—"
-                    row[f"{phase} · O px"] = _fmt(r["over_price"])
-                    row[f"{phase} · U px"] = _fmt(r["under_price"])
-            rows.append(row)
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        if has_line:
+            line_section = (
+                f'<div style="display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;">'
+                f'<div><span style="color:#8B95A8;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;">Open</span> '
+                f'<strong style="color:#E5E9F0;font-size:14px;">{open_line_str}</strong> '
+                f'{open_prices} '
+                f'<span style="color:#8B95A8;font-size:10px;margin-left:4px;">{_fmt_time(op["fetched_utc"])}</span></div>'
+                f'<div><span style="color:#8B95A8;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;">Latest</span> '
+                f'<strong style="color:#E5E9F0;font-size:14px;">{latest_line_str}</strong> '
+                f'{line_movement} '
+                f'{latest_prices} '
+                f'<span style="color:#8B95A8;font-size:10px;margin-left:4px;">{_fmt_time(lt["fetched_utc"])}</span></div>'
+                f'</div>'
+            )
+        else:
+            line_section = (
+                f'<div style="display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;">'
+                f'<div><span style="color:#8B95A8;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;">Open</span> '
+                f'{open_prices} '
+                f'<span style="color:#8B95A8;font-size:10px;margin-left:4px;">{_fmt_time(op["fetched_utc"])}</span></div>'
+                f'<div><span style="color:#8B95A8;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;">Latest</span> '
+                f'{latest_prices} '
+                f'<span style="color:#8B95A8;font-size:10px;margin-left:4px;">{_fmt_time(lt["fetched_utc"])}</span></div>'
+                f'</div>'
+            )
 
-    st.caption(
-        f"All prices in decimal odds. {len(odds_df)} total snapshot rows across "
-        f"{len(captured_phases)} phase(s)."
-    )
+        header_html = (
+            f'<div style="background:#172033;border-radius:8px;padding:10px 14px;'
+            f'margin-bottom:8px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;'
+            f'margin-bottom:6px;">'
+            f'<div><strong style="color:#E5E9F0;font-size:13px;">{label}</strong>'
+            f' <span style="color:#8B95A8;font-size:11px;margin-left:6px;">{book}{moved_indicator}</span></div>'
+            f'<span style="color:#8B95A8;font-size:10px;">{n_phases} snapshot{"s" if n_phases != 1 else ""}</span>'
+            f'</div>'
+            f'{line_section}'
+            f'</div>'
+        )
+        st.markdown(header_html, unsafe_allow_html=True)
+
+    # Render compact view
+    _market_row("spreads", "Spread", has_line=True)
+    _market_row("totals",  "Total",  has_line=True)
+    _market_row("h2h",     "Moneyline", has_line=False)
+
+    # Expander: show full timeline of all phases for all books
+    with st.expander("▶ Show full snapshot history", expanded=False):
+        odds_df = odds_for_game(g["game_id"], _mtime=mtime)
+        if odds_df.empty:
+            st.caption("No snapshots.")
+        else:
+            for market_key, label in [("spreads", "Spread"), ("totals", "Total"), ("h2h", "Moneyline")]:
+                m_df = odds_df[odds_df["market"] == market_key].copy()
+                if m_df.empty:
+                    continue
+                st.markdown(f"**{label}**")
+                # Build a clean timeline table
+                if market_key == "spreads":
+                    m_df["line"] = m_df.apply(
+                        lambda r: f"{home['abbreviation']} {r['spread_home']:+g}"
+                        if pd.notna(r["spread_home"]) else "—", axis=1)
+                    m_df["away_px"] = m_df["away_price"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+                    m_df["home_px"] = m_df["home_price"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+                    cols = ["fetched_utc", "snapshot_phase", "bookmaker", "line", "away_px", "home_px"]
+                elif market_key == "totals":
+                    m_df["line"] = m_df["total_line"].apply(lambda x: f"{x:g}" if pd.notna(x) else "—")
+                    m_df["over_px"] = m_df["over_price"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+                    m_df["under_px"] = m_df["under_price"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+                    cols = ["fetched_utc", "snapshot_phase", "bookmaker", "line", "over_px", "under_px"]
+                else:  # h2h
+                    m_df["away_px"] = m_df["away_price"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+                    m_df["home_px"] = m_df["home_price"].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
+                    cols = ["fetched_utc", "snapshot_phase", "bookmaker", "away_px", "home_px"]
+                m_df = m_df.sort_values("fetched_utc", ascending=False)[cols]
+                m_df["fetched_utc"] = m_df["fetched_utc"].apply(_fmt_time)
+                st.dataframe(m_df.rename(columns={
+                    "fetched_utc": "When",
+                    "snapshot_phase": "Phase",
+                    "bookmaker": "Book",
+                }), hide_index=True, width="stretch")

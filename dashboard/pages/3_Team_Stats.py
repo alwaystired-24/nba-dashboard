@@ -54,20 +54,38 @@ abbrs = sorted({tlookup[t]["abbreviation"] for t in tlookup})
 conferences = sorted({tlookup[t]["conference"] for t in tlookup if tlookup[t].get("conference")})
 divisions = sorted({tlookup[t]["division"] for t in tlookup if tlookup[t].get("division")})
 
-with st.sidebar:
-    st.markdown("### 🎛️ Filters")
-    teams_sel = st.multiselect("Team(s)", abbrs, default=[], key="ts_teams")
-    conf_sel = st.multiselect("Conference", conferences, default=[], key="ts_conf") if conferences else []
-    div_sel = st.multiselect("Division", divisions, default=[], key="ts_div") if divisions else []
+# Top-right floating filters popover (replaces sidebar)
+filter_cols = st.columns([5, 1])
+with filter_cols[1]:
+    n_active = 0  # placeholder, computed inside popover
+    with st.popover("☰ Filters", width="stretch"):
+        st.markdown("### 🎛️ Filters")
+        teams_sel = st.multiselect("Team(s)", abbrs, default=[], key="ts_teams")
+        conf_sel = st.multiselect("Conference", conferences, default=[], key="ts_conf") if conferences else []
+        div_sel = st.multiselect("Division", divisions, default=[], key="ts_div") if divisions else []
 
-    active = []
-    if teams_sel: active.append(f"{len(teams_sel)} team(s)")
-    if conf_sel: active.append(f"{len(conf_sel)} conf")
-    if div_sel: active.append(f"{len(div_sel)} div")
-    if active:
-        st.markdown(f"**Active:** {', '.join(active)}")
-    else:
-        st.caption("No filters active (all 30 teams)")
+        active = []
+        if teams_sel: active.append(f"{len(teams_sel)} team(s)")
+        if conf_sel: active.append(f"{len(conf_sel)} conf")
+        if div_sel: active.append(f"{len(div_sel)} div")
+        if active:
+            st.markdown(f"**Active:** {', '.join(active)}")
+        else:
+            st.caption("No filters active (all 30 teams)")
+
+# Show active-filter chip at top so user knows filters are applied
+n_active_filters = len([x for x in [teams_sel, conf_sel, div_sel] if x])
+if n_active_filters:
+    parts = []
+    if teams_sel: parts.append(f"{len(teams_sel)} team(s)")
+    if conf_sel: parts.append(f"{len(conf_sel)} conf")
+    if div_sel: parts.append(f"{len(div_sel)} div")
+    st.markdown(
+        f'<div style="background:rgba(244,167,66,0.15);color:#F4A742;'
+        f'padding:6px 12px;border-radius:6px;font-size:12px;display:inline-block;'
+        f'margin-bottom:8px;">🎛️ Active filters: {", ".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
 
 # =========================================================================
 # DATA — ranks always vs full league

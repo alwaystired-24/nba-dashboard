@@ -70,42 +70,60 @@ demo = _player_demographics(mtime)
 abbrs = sorted({tlookup[t]["abbreviation"] for t in tlookup})
 available_pos = sorted([p for p in demo["position"].dropna().unique() if p]) if "position" in demo.columns else []
 
-with st.sidebar:
-    st.markdown("### 🎛️ Filters")
-    teams_sel = st.multiselect("Team(s)", abbrs, default=[], key="ps_teams")
-    pos_sel = st.multiselect("Position", available_pos, default=[], key="ps_pos")
-    if "age" in demo.columns and demo["age"].notna().any():
-        age_min = int(demo["age"].dropna().min())
-        age_max = int(demo["age"].dropna().max())
-        age_range = st.slider("Age range", age_min, age_max, (age_min, age_max), key="ps_age")
-    else:
-        age_range = None
-        st.caption("Age data unavailable — run `python -m scripts.run demographics`")
-    # Defaults adapt to season type — playoffs has fewer games, so lower threshold
-    if season_filter == "playoffs":
-        default_gp, default_min = 1, 0.0
-        gp_help = "Min playoff games. Default lowered to 1 since playoffs are short."
-    else:
-        default_gp, default_min = 5, 12.0
-        gp_help = None
-    min_gp = st.number_input("Min GP", min_value=1, max_value=82,
-                              value=default_gp, key=f"ps_mingp_{season_filter}",
-                              help=gp_help)
-    min_min = st.number_input("Min MIN", min_value=0.0, max_value=48.0,
-                                value=default_min, step=1.0,
-                                key=f"ps_minmin_{season_filter}")
+filter_cols = st.columns([5, 1])
+with filter_cols[1]:
+    with st.popover("☰ Filters", width="stretch"):
+        st.markdown("### 🎛️ Filters")
+        teams_sel = st.multiselect("Team(s)", abbrs, default=[], key="ps_teams")
+        pos_sel = st.multiselect("Position", available_pos, default=[], key="ps_pos")
+        if "age" in demo.columns and demo["age"].notna().any():
+            age_min = int(demo["age"].dropna().min())
+            age_max = int(demo["age"].dropna().max())
+            age_range = st.slider("Age range", age_min, age_max, (age_min, age_max), key="ps_age")
+        else:
+            age_range = None
+            st.caption("Age data unavailable — run `python -m scripts.run demographics`")
+        # Defaults adapt to season type — playoffs has fewer games, so lower threshold
+        if season_filter == "playoffs":
+            default_gp, default_min = 1, 0.0
+            gp_help = "Min playoff games. Default lowered to 1 since playoffs are short."
+        else:
+            default_gp, default_min = 5, 12.0
+            gp_help = None
+        min_gp = st.number_input("Min GP", min_value=1, max_value=82,
+                                  value=default_gp, key=f"ps_mingp_{season_filter}",
+                                  help=gp_help)
+        min_min = st.number_input("Min MIN", min_value=0.0, max_value=48.0,
+                                    value=default_min, step=1.0,
+                                    key=f"ps_minmin_{season_filter}")
 
-    active = []
-    if teams_sel: active.append(f"{len(teams_sel)} team(s)")
-    if pos_sel: active.append(f"{len(pos_sel)} pos")
-    if age_range and (age_range[0] != age_min or age_range[1] != age_max):
-        active.append(f"age {age_range[0]}–{age_range[1]}")
-    if min_gp != default_gp: active.append(f"GP≥{min_gp}")
-    if min_min != default_min: active.append(f"MIN≥{min_min}")
-    if active:
-        st.markdown(f"**Active:** {', '.join(active)}")
-    else:
-        st.caption("No filters active (defaults shown)")
+        active = []
+        if teams_sel: active.append(f"{len(teams_sel)} team(s)")
+        if pos_sel: active.append(f"{len(pos_sel)} pos")
+        if age_range and (age_range[0] != age_min or age_range[1] != age_max):
+            active.append(f"age {age_range[0]}–{age_range[1]}")
+        if min_gp != default_gp: active.append(f"GP≥{min_gp}")
+        if min_min != default_min: active.append(f"MIN≥{min_min}")
+        if active:
+            st.markdown(f"**Active:** {', '.join(active)}")
+        else:
+            st.caption("No filters active (defaults shown)")
+
+# Show active-filter chip outside popover so user knows filters are on
+_active_chips = []
+if teams_sel: _active_chips.append(f"{len(teams_sel)} team(s)")
+if pos_sel: _active_chips.append(f"{len(pos_sel)} pos")
+if age_range is not None and "age_min" in dir() and (age_range[0] != age_min or age_range[1] != age_max):
+    _active_chips.append(f"age {age_range[0]}–{age_range[1]}")
+if min_gp != default_gp: _active_chips.append(f"GP≥{min_gp}")
+if min_min != default_min: _active_chips.append(f"MIN≥{min_min}")
+if _active_chips:
+    st.markdown(
+        f'<div style="background:rgba(244,167,66,0.15);color:#F4A742;'
+        f'padding:6px 12px;border-radius:6px;font-size:12px;display:inline-block;'
+        f'margin-bottom:8px;">🎛️ Active filters: {", ".join(_active_chips)}</div>',
+        unsafe_allow_html=True,
+    )
 
 # =========================================================================
 # DATA
