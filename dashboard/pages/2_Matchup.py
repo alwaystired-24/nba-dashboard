@@ -577,6 +577,131 @@ if not is_upcoming:
 
             st.caption("★ = starter. Minutes shown as MM:SS. +/- colored green (positive) or red (negative).")
 
+    # ---- QUARTER-BY-QUARTER SCORING — stacked area chart ----
+    from lib.data import quarter_scores_for_game
+    qtr_df = quarter_scores_for_game(g["game_id"], _mtime=mtime)
+    if not qtr_df.empty and len(qtr_df) >= 2:
+        st.subheader("📈 Quarter-by-Quarter Scoring")
+        st.caption("Stacked area showing cumulative points by end of each period. "
+                    "Each band is one quarter's contribution.")
+
+        import plotly.graph_objects as go
+
+        # Build data: for each team, points scored in each period (Q1-4 + OTs if any)
+        # Then cumulative for the running-total area chart
+        home_qtr_row = qtr_df[qtr_df["is_home"] == 1]
+        away_qtr_row = qtr_df[qtr_df["is_home"] == 0]
+
+        if home_qtr_row.empty or away_qtr_row.empty:
+            st.caption("Quarter data incomplete for this game.")
+        else:
+            home_q = home_qtr_row.iloc[0]
+            away_q = away_qtr_row.iloc[0]
+
+            # Detect OT periods present
+            periods = ["Q1", "Q2", "Q3", "Q4"]
+            for ot_i in range(1, 5):
+                col = f"pts_ot{ot_i}"
+                hv = home_q.get(col)
+                av = away_q.get(col)
+                if (pd.notna(hv) and hv > 0) or (pd.notna(av) and av > 0):
+                    periods.append(f"OT{ot_i}")
+
+            def _period_pts(team_row, period: str) -> int:
+                if period.startswith("Q"):
+                    col = f"pts_q{period[1]}"
+                else:
+                    col = f"pts_ot{period[2]}"
+                v = team_row.get(col)
+                return int(v) if pd.notna(v) else 0
+
+            # x-axis points: end of each period (0=tip, 1=end of Q1, etc.)
+            x_labels = ["Tip"] + periods
+            x_indices = list(range(len(x_labels)))
+
+            # Cumulative scores at each x
+            home_cum = [0]
+            away_cum = [0]
+            for p in periods:
+                home_cum.append(home_cum[-1] + _period_pts(home_q, p))
+                away_cum.append(away_cum[-1] + _period_pts(away_q, p))
+
+            fig = go.Figure()
+            # Away team area (filled to zero)
+            fig.add_trace(go.Scatter(
+                x=x_indices, y=away_cum,
+                mode="lines+markers+text",
+                name=away["abbreviation"],
+                line=dict(color="#5FBE85", width=3),
+                marker=dict(size=8, color="#5FBE85"),
+                fill="tozeroy",
+                fillcolor="rgba(95,190,133,0.18)",
+                text=[str(v) if v > 0 else "" for v in away_cum],
+                textposition="top center",
+                textfont=dict(color="#5FBE85", size=11),
+                hovertemplate=f"<b>{away['full_name']}</b><br>%{{x}}: %{{y}} pts<extra></extra>",
+            ))
+            # Home team area (overlaid, semi-transparent)
+            fig.add_trace(go.Scatter(
+                x=x_indices, y=home_cum,
+                mode="lines+markers+text",
+                name=home["abbreviation"],
+                line=dict(color="#F4A742", width=3),
+                marker=dict(size=8, color="#F4A742"),
+                fill="tozeroy",
+                fillcolor="rgba(244,167,66,0.18)",
+                text=[str(v) if v > 0 else "" for v in home_cum],
+                textposition="bottom center",
+                textfont=dict(color="#F4A742", size=11),
+                hovertemplate=f"<b>{home['full_name']}</b><br>%{{x}}: %{{y}} pts<extra></extra>",
+            ))
+
+            fig.update_layout(
+                height=380,
+                margin=dict(l=10, r=10, t=20, b=40),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(
+                    title="",
+                    tickmode="array",
+                    tickvals=x_indices,
+                    ticktext=x_labels,
+                    color="#E5E9F0",
+                    gridcolor="#25304a",
+                    zerolinecolor="#25304a",
+                ),
+                yaxis=dict(
+                    title="Cumulative Points",
+                    color="#8B95A8",
+                    gridcolor="#25304a",
+                    zerolinecolor="#25304a",
+                ),
+                legend=dict(
+                    orientation="h", y=1.08, x=0.5, xanchor="center",
+                    bgcolor="rgba(0,0,0,0)", font=dict(color="#E5E9F0"),
+                ),
+                hoverlabel=dict(bgcolor="#172033", bordercolor="#25304a",
+                                 font=dict(color="#E5E9F0")),
+            )
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
+            # Per-quarter breakdown table below the chart
+            qtr_breakdown = pd.DataFrame({
+                "": ["1st", "2nd", "3rd", "4th"] + [p for p in periods if p.startswith("OT")] + ["Final"],
+                away["abbreviation"]: (
+                    [_period_pts(away_q, p) for p in periods] +
+                    [int(away_q["pts_total"]) if pd.notna(away_q["pts_total"]) else 0]
+                ),
+                home["abbreviation"]: (
+                    [_period_pts(home_q, p) for p in periods] +
+                    [int(home_q["pts_total"]) if pd.notna(home_q["pts_total"]) else 0]
+                ),
+            })
+            st.dataframe(qtr_breakdown, hide_index=True, width="stretch")
+    elif not is_upcoming:
+        st.caption("📈 Quarter-by-quarter data not available — run "
+                    "`python -m scripts.run quarters` to backfill.")
+
     st.divider()
 
 # =========================================================================

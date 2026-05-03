@@ -23,6 +23,10 @@ from .demographics import (
 )
 from .odds import run_odds_fetch, ensure_odds_schema
 from .espn import run_espn_fetch, ensure_espn_schema
+from .quarters import (
+    ensure_quarter_schema,
+    backfill_quarter_scores,
+)
 from .etl import (
     ingest_advanced_box,
     ingest_schedule,
@@ -116,6 +120,17 @@ def cmd_daily(args):
     except Exception as exc:
         print(f"(Skipped ESPN fetch: {exc})")
 
+    # Backfill quarter scores for any newly-Final games (best-effort, non-fatal)
+    try:
+        with connect() as conn:
+            ensure_quarter_schema(conn)
+            qsum = backfill_quarter_scores(conn)
+        if qsum["games_processed"] > 0:
+            print(f"Quarters: processed {qsum['games_processed']} games, "
+                   f"stored {qsum['rows_stored']} rows ({qsum['games_failed']} failed)")
+    except Exception as exc:
+        print(f"(Skipped quarter scores: {exc})")
+
     return 0 if fail == 0 else 1
 
 
@@ -181,6 +196,33 @@ def cmd_espn_init(args):
     return 0
 
 
+def cmd_quarters_init(args):
+    """One-time: apply migration 004 (quarter scoring schema)."""
+    with connect() as conn:
+        ensure_quarter_schema(conn)
+    print("Quarter scoring schema applied. Run `python -m scripts.run quarters` "
+           "to backfill from NBA stats.")
+    return 0
+
+
+def cmd_quarters(args):
+    """Backfill team_quarter_scores for Final games not yet captured."""
+    limit = getattr(args, "limit", None)
+    with connect() as conn:
+        ensure_quarter_schema(conn)
+        try:
+            summary = backfill_quarter_scores(conn, limit=limit)
+        except Exception as exc:
+            print(f"Quarters backfill failed: {exc}")
+            return 1
+    print(f"Quarters backfill complete:")
+    print(f"  games processed:    {summary['games_processed']}")
+    print(f"  games succeeded:    {summary['games_succeeded']}")
+    print(f"  games failed:       {summary['games_failed']}")
+    print(f"  rows stored:        {summary['rows_stored']}")
+    return 0 if summary["games_failed"] == 0 else 1
+
+
 def cmd_status(args):
     with connect() as conn:
         for tbl in ("teams", "players", "games",
@@ -237,6 +279,12 @@ def main(argv=None):
 
     sub.add_parser("espn", help="fetch injuries + team news from ESPN").set_defaults(func=cmd_espn)
     sub.add_parser("espn_init", help="apply ESPN schema migration (one-time)").set_defaults(func=cmd_espn_init)
+
+    p = sub.add_parser("quarters", help="backfill per-team per-quarter scoring for Final games")
+    p.add_argument("--limit", type=int, default=None,
+                    help="max games to process (omit for all). Use a small value first to validate.")
+    p.set_defaults(func=cmd_quarters)
+    sub.add_parser("quarters_init", help="apply quarter scoring schema migration (one-time)").set_defaults(func=cmd_quarters_init)
 
     sub.add_parser("status", help="row counts + last run").set_defaults(func=cmd_status)
 

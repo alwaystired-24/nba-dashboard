@@ -117,6 +117,40 @@ def latest_loaded_date(_mtime: float = 0.0) -> str | None:
 # =========================================================================
 
 @st.cache_data(show_spinner=False)
+def quarter_scores_for_game(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
+    """Per-team per-quarter scoring for one game.
+
+    Returns 2 rows (one per team) with columns:
+        team_id, abbreviation, full_name, is_home,
+        pts_q1, pts_q2, pts_q3, pts_q4,
+        pts_ot1..pts_ot4, pts_total
+
+    Returns empty DataFrame if quarter data hasn't been backfilled for this game.
+    """
+    try:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            return pd.read_sql_query(
+                """
+                SELECT qs.team_id, t.abbreviation, t.full_name,
+                       tbt.is_home,
+                       qs.pts_q1, qs.pts_q2, qs.pts_q3, qs.pts_q4,
+                       qs.pts_ot1, qs.pts_ot2, qs.pts_ot3, qs.pts_ot4,
+                       qs.pts_total
+                FROM team_quarter_scores qs
+                JOIN teams t ON t.team_id = qs.team_id
+                LEFT JOIN team_box_traditional tbt
+                  ON tbt.game_id = qs.game_id AND tbt.team_id = qs.team_id
+                WHERE qs.game_id = ?
+                ORDER BY tbt.is_home DESC
+                """,
+                conn, params=(game_id,),
+            )
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet (migration not applied)
+        return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False)
 def game_team_box(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
     """Both teams' traditional + advanced merged for a single game."""
     with _connect() as conn:
