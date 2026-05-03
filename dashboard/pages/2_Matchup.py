@@ -356,6 +356,230 @@ lg = _league_means(window, season_filter, _mtime=mtime)
 st.divider()
 
 # =========================================================================
+# POST-GAME CHARTS (only for Final games)
+# =========================================================================
+if not is_upcoming:
+    from lib.data import game_team_box, game_player_box
+
+    team_box = game_team_box(g["game_id"], _mtime=mtime)
+    player_box = game_player_box(g["game_id"], _mtime=mtime)
+
+    if not team_box.empty:
+        st.subheader("📊 Team Comparison")
+        st.caption("Side-by-side comparison of both teams' final box score numbers.")
+
+        # Pick the right rows for home and away
+        home_row = team_box[team_box["is_home"] == 1]
+        away_row = team_box[team_box["is_home"] == 0]
+
+        if not home_row.empty and not away_row.empty:
+            home_r = home_row.iloc[0]
+            away_r = away_row.iloc[0]
+
+            # Comparison stats: mix of traditional + advanced
+            COMPARISON_SPECS = [
+                ("pts", "Points", ".0f"),
+                ("fg_pct", "FG %", ".1%"),
+                ("fg3_pct", "3P %", ".1%"),
+                ("ft_pct", "FT %", ".1%"),
+                ("reb", "Rebounds", ".0f"),
+                ("ast", "Assists", ".0f"),
+                ("stl", "Steals", ".0f"),
+                ("blk", "Blocks", ".0f"),
+                ("tov", "Turnovers", ".0f"),
+                ("off_rating", "OFF Rating", ".1f"),
+                ("def_rating", "DEF Rating", ".1f"),
+                ("ts_pct", "TS %", ".1%"),
+            ]
+            # For "lower is better" stats
+            LOWER_BETTER = {"tov", "def_rating"}
+
+            # Build the chart — grouped horizontal bars, away vs home
+            import plotly.graph_objects as go
+
+            metric_labels = []
+            home_vals = []
+            away_vals = []
+            home_displays = []
+            away_displays = []
+            home_better = []  # color flag
+
+            for col, label, fmt in COMPARISON_SPECS:
+                if col not in team_box.columns:
+                    continue
+                hv = home_r[col]
+                av = away_r[col]
+                if pd.isna(hv) or pd.isna(av):
+                    continue
+                metric_labels.append(label)
+                home_vals.append(float(hv))
+                away_vals.append(float(av))
+                # Format display (handle %)
+                if fmt == ".1%":
+                    home_displays.append(f"{hv*100:.1f}%")
+                    away_displays.append(f"{av*100:.1f}%")
+                elif fmt == ".1f":
+                    home_displays.append(f"{hv:.1f}")
+                    away_displays.append(f"{av:.1f}")
+                else:
+                    home_displays.append(f"{int(hv)}")
+                    away_displays.append(f"{int(av)}")
+                # Determine winner per metric
+                if col in LOWER_BETTER:
+                    home_better.append(hv < av)
+                else:
+                    home_better.append(hv > av)
+
+            # Normalize values to 0-1 for the chart so percentages and counts coexist
+            # Per row, home_pct = hv / (hv + av), so the bars sum to 100%
+            home_pct = []
+            away_pct = []
+            for hv, av in zip(home_vals, away_vals):
+                total = abs(hv) + abs(av)
+                if total == 0:
+                    home_pct.append(0.5)
+                    away_pct.append(0.5)
+                else:
+                    home_pct.append(abs(hv) / total)
+                    away_pct.append(abs(av) / total)
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                y=metric_labels,
+                x=[-p for p in away_pct],  # negative for left side
+                orientation="h",
+                name=away["abbreviation"],
+                marker=dict(color="#5FBE85", line=dict(width=0)),
+                text=away_displays,
+                textposition="inside",
+                insidetextanchor="end",
+                textfont=dict(color="#0E1525", size=11, family="sans-serif"),
+                hovertemplate=f"<b>{away['full_name']}</b><br>%{{y}}: %{{text}}<extra></extra>",
+            ))
+            fig.add_trace(go.Bar(
+                y=metric_labels,
+                x=home_pct,  # positive for right side
+                orientation="h",
+                name=home["abbreviation"],
+                marker=dict(color="#F4A742", line=dict(width=0)),
+                text=home_displays,
+                textposition="inside",
+                insidetextanchor="start",
+                textfont=dict(color="#0E1525", size=11, family="sans-serif"),
+                hovertemplate=f"<b>{home['full_name']}</b><br>%{{y}}: %{{text}}<extra></extra>",
+            ))
+            fig.update_layout(
+                barmode="relative",
+                height=max(380, 30 * len(metric_labels) + 80),
+                margin=dict(l=10, r=10, t=10, b=30),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(
+                    title="",
+                    color="#8B95A8",
+                    gridcolor="rgba(0,0,0,0)",
+                    zerolinecolor="#25304a",
+                    zerolinewidth=2,
+                    showticklabels=False,
+                    range=[-1, 1],
+                ),
+                yaxis=dict(
+                    color="#E5E9F0",
+                    autorange="reversed",  # first metric on top
+                    tickfont=dict(size=12),
+                ),
+                legend=dict(
+                    orientation="h",
+                    y=-0.05,
+                    x=0.5,
+                    xanchor="center",
+                    bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#E5E9F0"),
+                ),
+                hoverlabel=dict(bgcolor="#172033", bordercolor="#25304a",
+                                 font=dict(color="#E5E9F0")),
+            )
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
+    # ---- BOX SCORE — All players who appeared, both teams side by side ----
+    if not player_box.empty:
+        st.subheader("📋 Box Score")
+        st.caption("All players who appeared in the game. Sorted by minutes within each team. "
+                    "Click any column header to re-sort.")
+
+        # Filter to players who actually played
+        active = player_box[player_box["minutes"].fillna(0) > 0].copy()
+        if active.empty:
+            st.info("No players with minutes recorded.")
+        else:
+            def _format_min(v):
+                if pd.isna(v):
+                    return "—"
+                # NBA box scores show like 32:45 typically. Our minutes is decimal.
+                m = int(v)
+                s = int(round((v - m) * 60))
+                return f"{m}:{s:02d}"
+
+            def _format_pm(v):
+                if pd.isna(v):
+                    return "—"
+                return f"{int(v):+d}"
+
+            def _build_team_box(side: str, team_id_val: int, team_name: str):
+                tdf = active[active["team_id"] == team_id_val].copy()
+                if tdf.empty:
+                    return
+                tdf = tdf.sort_values(["is_starter", "minutes"], ascending=[False, False])
+
+                rows = []
+                for _, r in tdf.iterrows():
+                    rows.append({
+                        "Player": ("★ " if r["is_starter"] else "  ") + r["player_name"],
+                        "MIN": _format_min(r["minutes"]),
+                        "PTS": int(r["pts"]) if pd.notna(r["pts"]) else 0,
+                        "REB": int(r["reb"]) if pd.notna(r["reb"]) else 0,
+                        "AST": int(r["ast"]) if pd.notna(r["ast"]) else 0,
+                        "STL": int(r["stl"]) if pd.notna(r["stl"]) else 0,
+                        "BLK": int(r["blk"]) if pd.notna(r["blk"]) else 0,
+                        "TO": int(r["tov"]) if pd.notna(r["tov"]) else 0,
+                        "FG": f"{int(r['fgm'])}-{int(r['fga'])}" if pd.notna(r["fgm"]) else "—",
+                        "3P": f"{int(r['fg3m'])}-{int(r['fg3a'])}" if pd.notna(r["fg3m"]) else "—",
+                        "FT": f"{int(r['ftm'])}-{int(r['fta'])}" if pd.notna(r["ftm"]) else "—",
+                        "+/-": _format_pm(r.get("plus_minus")) if "plus_minus" in r else "—",
+                    })
+                bdf = pd.DataFrame(rows)
+
+                # Color +/- column green/red
+                def _style_pm(row: pd.Series) -> list[str]:
+                    styles = [""] * len(row)
+                    pm_str = row.get("+/-", "")
+                    if pm_str and pm_str not in ("—", "+0", "0"):
+                        try:
+                            pm_val = int(pm_str.replace("+", ""))
+                        except ValueError:
+                            return styles
+                        col_idx = row.index.get_loc("+/-")
+                        if pm_val > 0:
+                            styles[col_idx] = "background-color: rgba(62,168,102,0.18); color: #5FBE85; font-weight: 600;"
+                        elif pm_val < 0:
+                            styles[col_idx] = "background-color: rgba(200,70,70,0.18); color: #E37070; font-weight: 600;"
+                    return styles
+
+                styler = bdf.style.apply(_style_pm, axis=1)
+                st.markdown(f"#### {team_name}")
+                st.dataframe(styler, hide_index=True, width="stretch")
+
+            box_cols = st.columns(2)
+            with box_cols[0]:
+                _build_team_box("away", away_id, f"✈️ {away['full_name']}")
+            with box_cols[1]:
+                _build_team_box("home", home_id, f"🏠 {home['full_name']}")
+
+            st.caption("★ = starter. Minutes shown as MM:SS. +/- colored green (positive) or red (negative).")
+
+    st.divider()
+
+# =========================================================================
 # Form snapshot — colored metric cards, 4 per row, ranks vs full league
 # =========================================================================
 st.subheader(f"📊 Form snapshot — {window}")
