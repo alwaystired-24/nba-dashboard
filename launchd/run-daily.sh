@@ -4,7 +4,7 @@
 
 set -e
 
-REPO="/Users/edwardlam/Documents/nba-dashboard"
+REPO="/Users/edwardlam/Documents/thefifthquarter/01-data-foundation/nba-dashboard"
 LOG="$HOME/Library/Logs/nba-dashboard-daily.log"
 
 # Append timestamped header
@@ -22,6 +22,6 @@ if [ -f .env ]; then
 fi
 
 # Run daily ETL — captures both stdout and stderr
-python -m scripts.run daily >> "$LOG" 2>&1 || echo "daily exited non-zero: $?" >> "$LOG"
+.venv/bin/python -m scripts.run daily >> "$LOG" 2>&1 || echo "daily exited non-zero: $?" >> "$LOG"
 
 echo "==== $(date) — done ====" >> "$LOG"

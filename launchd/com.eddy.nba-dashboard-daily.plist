@@ -9,7 +9,7 @@
     <!-- Path to the wrapper shell script -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/edwardlam/Documents/nba-dashboard/launchd/run-daily.sh</string>
+        <string>/Users/edwardlam/Documents/thefifthquarter/01-data-foundation/nba-dashboard/launchd/run-daily.sh</string>
     </array>
 
     <!-- Run every day at 09:00 HKT (HKT is UTC+8, no DST) -->
