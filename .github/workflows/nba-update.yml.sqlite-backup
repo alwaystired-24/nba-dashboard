@@ -1,0 +1,69 @@
+name: NBA Update
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Mode'
+        required: true
+        default: 'daily'
+        type: choice
+        options:
+          - daily
+          - backfill
+#  schedule:
+#    # 09:00 UTC = 17:00 Hong Kong time = after all NBA games have ended
+#    - cron: '0 9 * * *'
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 90
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Initialize database (idempotent)
+        run: python -m scripts.run init
+
+      - name: Run ETL
+        run: python -m scripts.run ${{ github.event.inputs.mode || 'daily' }}
+
+      - name: Show status
+        run: python -m scripts.run status
+
+      - name: Verify database file exists
+        run: |
+          if [ ! -f data/nba.db ]; then
+            echo "::error::data/nba.db is missing after ETL — something went wrong upstream."
+            exit 1
+          fi
+          ls -la data/
+          echo "DB size: $(du -h data/nba.db | cut -f1)"
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/nba.db
+          git status
+          if git diff --staged --quiet; then
+            echo "No changes to commit (DB unchanged since last run)."
+          else
+            git commit -m "Auto-update: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+            echo "Database committed and pushed."
+          fi

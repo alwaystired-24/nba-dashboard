@@ -1,0 +1,64 @@
+name: ESPN Update
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every hour, all UTC. Catches morning/midday/evening status updates.
+    - cron: '0 * * * *'
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    timeout-minutes: 8
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+
+      - name: Apply ESPN schema
+        run: python -m scripts.run espn_init
+
+      - name: Fetch ESPN data
+        run: |
+          set -e  # exit on any error
+          python -m scripts.run espn 2>&1 | tee /tmp/espn-output.log
+          # If the previous command exited 0 but printed an error, also fail
+          if grep -qi "fetch failed\|traceback" /tmp/espn-output.log; then
+            echo "::error::ESPN fetch reported errors"
+            exit 1
+          fi
+
+      - name: Commit DB if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/nba.db
+          if git diff --cached --quiet; then
+            echo "No DB changes — nothing to commit"
+          else
+            STAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
+            git commit -m "ESPN update: $STAMP"
+            # Retry-on-conflict loop: if another workflow pushed first, rebase + retry
+            for i in 1 2 3; do
+              if git push; then
+                echo "Pushed on attempt $i"
+                exit 0
+              fi
+              echo "Push failed (attempt $i), pulling + retrying..."
+              git pull --rebase --strategy-option=theirs
+              sleep $((i * 3))
+            done
+            echo "::error::Failed to push after 3 attempts"
+            exit 1
+          fi

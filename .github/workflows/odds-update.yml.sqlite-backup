@@ -33,16 +33,17 @@ on:
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     timeout-minutes: 10
-    # Concurrency: if Cron-job.org triggers fire close together, the older run
-    # is killed and the newer trigger runs. Net result: ONE snapshot stored,
-    # ONE API credit spent. No double-counting.
+    # Concurrency: if Cron-job.org and GitHub native cron both fire at the same
+    # UTC minute, the older run is killed and the newer trigger runs. Net result:
+    # ONE snapshot stored, ONE API credit spent. No double-counting.
     concurrency:
       group: odds-fetch
       cancel-in-progress: true
     env:
       THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v5
@@ -76,3 +77,33 @@ jobs:
 
       - name: Run odds fetch (spreads + totals only — moneyline dropped to fit 500 cred/mo budget)
         run: python -m scripts.run odds --phase ${{ steps.phase.outputs.value }} --markets spreads,totals
+
+      - name: Verify DB modified
+        run: |
+          if [ ! -f data/nba.db ]; then
+            echo "::error::data/nba.db missing after odds run"
+            exit 1
+          fi
+          ls -la data/
+
+      - name: Commit updated database
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f data/nba.db
+          if git diff --staged --quiet; then
+            echo "No changes — skipping commit."
+          else
+            git commit -m "Odds update: ${{ steps.phase.outputs.value }} $(date -u +'%Y-%m-%d %H:%M UTC')"
+            for i in 1 2 3; do
+              if git push; then
+                echo "Pushed on attempt $i"
+                exit 0
+              fi
+              echo "Push failed (attempt $i), pulling + retrying..."
+              git pull --rebase --strategy-option=theirs
+              sleep $((i * 3))
+            done
+            echo "::error::Failed to push after 3 attempts"
+            exit 1
+          fi
