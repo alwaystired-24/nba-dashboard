@@ -27,3 +27,4 @@ venv/
 
 # Old broken files (from earlier macOS hidden-file issue)
 gitignore
+data/nba.db
