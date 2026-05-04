@@ -24,7 +24,18 @@ CREATE TABLE IF NOT EXISTS players (
     first_name       TEXT,
     last_name        TEXT,
     is_active        INTEGER NOT NULL DEFAULT 1,
-    last_seen_date   TEXT
+    last_seen_date   TEXT,
+    -- Demographics from commonplayerinfo endpoint
+    position         TEXT,
+    birthdate        TEXT,
+    height           TEXT,
+    weight           INTEGER,
+    jersey           TEXT,
+    team_id          INTEGER,
+    draft_year       INTEGER,
+    country          TEXT,
+    season_exp       INTEGER,
+    info_fetched     TEXT
 );
 
 -- =========================================================================
