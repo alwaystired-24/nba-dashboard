@@ -1,20 +1,17 @@
-"""Database queries for odds data — used by Matchup page.
-
-Migrated from SQLite to Postgres in Phase 1 (May 2026). Reuses _connect()
-and _fetchone() helpers from data.py to keep connection management consistent.
-"""
+"""Database queries for odds data — used by Matchup page."""
 from __future__ import annotations
 
-from contextlib import closing
+import sqlite3
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from .data import _connect, _fetchone
+from .data import DB_PATH
 
 
 @st.cache_data(show_spinner=False)
-def odds_for_game(game_id: str, _mtime: str = "") -> pd.DataFrame:
+def odds_for_game(game_id: str, _mtime: float) -> pd.DataFrame:
     """Return all odds snapshots for a game, sorted by phase + book + market.
 
     Includes opening / pre_game / closing phases. Returns empty DataFrame
@@ -23,7 +20,7 @@ def odds_for_game(game_id: str, _mtime: str = "") -> pd.DataFrame:
     if not game_id:
         return pd.DataFrame()
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
             df = pd.read_sql_query(
                 """
                 SELECT snapshot_phase, bookmaker, market, fetched_utc,
@@ -31,7 +28,7 @@ def odds_for_game(game_id: str, _mtime: str = "") -> pd.DataFrame:
                        spread_home, spread_away,
                        total_line, over_price, under_price
                 FROM odds_snapshots
-                WHERE game_id = %s
+                WHERE game_id = ?
                 ORDER BY
                     CASE snapshot_phase
                         WHEN 'opening'   THEN 1
@@ -44,37 +41,33 @@ def odds_for_game(game_id: str, _mtime: str = "") -> pd.DataFrame:
                 conn, params=(game_id,),
             )
         return df
-    except Exception:
+    except sqlite3.OperationalError:
         # Table doesn't exist yet — fresh DB
         return pd.DataFrame()
 
 
 @st.cache_data(show_spinner=False)
-def odds_event_for_game(game_id: str, _mtime: str = "") -> dict | None:
+def odds_event_for_game(game_id: str, _mtime: float) -> dict | None:
     """Get the odds_event_mapping row for a game (gives us the event_id, commence time)."""
     if not game_id:
         return None
     try:
-        with closing(_connect()) as conn:
-            row = _fetchone(conn,
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            row = conn.execute(
                 "SELECT event_id, commence_utc, home_team_name, away_team_name "
-                "FROM odds_event_mapping WHERE game_id = %s",
+                "FROM odds_event_mapping WHERE game_id = ?",
                 (game_id,),
-            )
+            ).fetchone()
             if row:
-                return {
-                    "event_id": row["event_id"],
-                    "commence_utc": row["commence_utc"],
-                    "home_team_name": row["home_team_name"],
-                    "away_team_name": row["away_team_name"],
-                }
-    except Exception:
+                return {"event_id": row[0], "commence_utc": row[1],
+                         "home_team_name": row[2], "away_team_name": row[3]}
+    except sqlite3.OperationalError:
         return None
     return None
 
 
 @st.cache_data(show_spinner=False)
-def odds_compact_view(game_id: str, _mtime: str = "") -> dict:
+def odds_compact_view(game_id: str, _mtime: float) -> dict:
     """Goaloo-style compact view: opening line + latest line per market.
 
     Returns a dict shaped like:
@@ -99,7 +92,7 @@ def odds_compact_view(game_id: str, _mtime: str = "") -> dict:
     if not game_id:
         return {}
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
             df = pd.read_sql_query(
                 """
                 SELECT snapshot_phase, bookmaker, market, fetched_utc,
@@ -107,12 +100,12 @@ def odds_compact_view(game_id: str, _mtime: str = "") -> dict:
                        spread_home, spread_away,
                        total_line, over_price, under_price
                 FROM odds_snapshots
-                WHERE game_id = %s
+                WHERE game_id = ?
                 ORDER BY fetched_utc ASC
                 """,
                 conn, params=(game_id,),
             )
-    except Exception:
+    except sqlite3.OperationalError:
         return {}
 
     if df.empty:

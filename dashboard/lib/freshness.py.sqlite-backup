@@ -4,44 +4,38 @@ Detects two conditions:
 1. Schedule is stale — latest game date in DB is >2 days before today HKT
 2. Odds have orphans — odds_event_mapping has rows where game_id IS NULL
    AND those events have commence_utc within the last 30 days
-
-Migrated from SQLite to Postgres in Phase 1 (May 2026).
 """
 from __future__ import annotations
 
-from contextlib import closing
-from datetime import date
+import sqlite3
+from datetime import date, datetime, timedelta
 
 import streamlit as st
 
-from .data import _connect, _fetchone, latest_loaded_date
+from .data import DB_PATH, latest_loaded_date
 from .format import hkt_today
 
 
 @st.cache_data(show_spinner=False, ttl=60)  # 60s cache so banner doesn't query on every rerun
-def _orphan_odds_count(_mtime: str = "") -> int:
+def _orphan_odds_count(_mtime: float) -> int:
     """Count unmatched odds events from the last 30 days."""
     try:
-        with closing(_connect()) as conn:
-            row = _fetchone(conn,
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            row = conn.execute(
                 """
-                SELECT COUNT(*) AS c FROM odds_event_mapping
+                SELECT COUNT(*) FROM odds_event_mapping
                 WHERE game_id IS NULL
-                  AND commence_utc::date >= (NOW() - INTERVAL '30 days')::date
+                  AND date(commence_utc) >= date('now', '-30 days')
                 """
-            )
-            return int(row["c"]) if row else 0
-    except Exception:
+            ).fetchone()
+            return int(row[0]) if row else 0
+    except sqlite3.OperationalError:
         # Tables don't exist yet (fresh DB) — no orphans to warn about
         return 0
 
 
-def show_freshness_banner(_mtime) -> None:
-    """Render warning banner if data is stale. Call at top of every page.
-
-    _mtime is now a string (db version token from data.db_mtime), not a float.
-    Kept as positional arg for backwards compat with all the page-level calls.
-    """
+def show_freshness_banner(_mtime: float) -> None:
+    """Render warning banner if data is stale. Call at top of every page."""
     today = date.fromisoformat(hkt_today())
     last = latest_loaded_date(_mtime=_mtime)
 

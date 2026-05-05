@@ -3,98 +3,30 @@
 All SQL lives here. Pages call these functions and never write SQL directly.
 Streamlit's @st.cache_data is used aggressively because the DB only changes
 once per day after the daily ETL run.
-
-Migrated from SQLite to Postgres (Supabase) in Phase 1 (May 2026).
-- _connect() returns a psycopg2 connection (caller wraps in `with closing(...)`)
-- db_mtime() now queries MAX(last_attempt_utc) from etl_runs as a cache key
-- All ? placeholders replaced with %s
-- conn.execute(...) replaced with cursor pattern
-- Row access is dict-style (RealDictCursor) — same ergonomics as SQLite Row
 """
 from __future__ import annotations
 
-import os
-from contextlib import closing
+import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-import psycopg2
-import psycopg2.extras
 import streamlit as st
-from dotenv import load_dotenv
 
-# Load .env from repo root so DATABASE_URL is available locally.
-# In Streamlit Cloud / GitHub Actions, DATABASE_URL is injected via env vars.
+# Database location — same path the scripts use
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
-
-# Kept for backwards-compat with imports of DB_PATH elsewhere in the app
-# (e.g. odds_data.py used to derive DB path from this). Now unused for the DB
-# itself; callers should not reference it for new code.
 DB_PATH = PROJECT_ROOT / "data" / "nba.db"
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL not set. Add it to .env locally, or to environment in deployment."
-    )
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def _connect():
-    """Return a psycopg2 connection with RealDictCursor as the default cursor.
-
-    Use with `closing()` to ensure proper cleanup, e.g.:
-        with closing(_connect()) as conn:
-            ...
-
-    RealDictCursor makes rows behave like dicts (`row["col_name"]`), matching
-    the SQLite Row factory we used previously. pandas.read_sql_query also
-    accepts this connection directly.
-    """
-    return psycopg2.connect(DATABASE_URL)
-
-
-def _fetchone(conn, sql: str, params: tuple = ()) -> dict | None:
-    """Convenience: execute SQL and return one row dict (or None).
-
-    Uses RealDictCursor so rows behave like dicts (row["col_name"]),
-    matching the SQLite Row factory ergonomics.
-    """
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, params)
-        return cur.fetchone()
-
-
-def _fetchall(conn, sql: str, params: tuple = ()) -> list[dict]:
-    """Convenience: execute SQL and return all rows as list of dicts.
-
-    Uses RealDictCursor so rows behave like dicts (row["col_name"]).
-    """
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(sql, params)
-        return cur.fetchall()
-
-
-@st.cache_data(show_spinner=False, ttl=30)
-def db_mtime() -> str:
-    """Cache invalidation token. Changes whenever ETL writes a new row.
-
-    Returns MAX(last_attempt_utc) from etl_runs as a string. Streamlit caches
-    using this as the _mtime parameter — when this value changes (i.e. ETL
-    ran), all data caches invalidate.
-
-    Cached for 30s itself so we don't hit the DB on every Streamlit rerun.
-    Returns empty string if the table is empty (fresh DB).
-    """
-    try:
-        with closing(_connect()) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute("SELECT MAX(last_attempt_utc) AS t FROM etl_runs")
-                row = cur.fetchone()
-                return str(row["t"]) if row and row["t"] else ""
-    except Exception:
-        return ""
+def db_mtime() -> float:
+    """Used as a cache key — when the DB file changes, all caches invalidate."""
+    return DB_PATH.stat().st_mtime if DB_PATH.exists() else 0.0
 
 
 # =========================================================================
@@ -104,7 +36,7 @@ def db_mtime() -> str:
 @st.cache_data(show_spinner=False)
 def teams(_mtime: float = 0.0) -> pd.DataFrame:
     """All 30 teams. _mtime forces cache invalidation when DB changes."""
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             "SELECT team_id, abbreviation, full_name, nickname, city, conference, division "
             "FROM teams ORDER BY abbreviation",
@@ -126,7 +58,7 @@ def team_lookup(_mtime: float = 0.0) -> dict[int, dict]:
 @st.cache_data(show_spinner=False)
 def games_on_date(target_date: str, _mtime: float = 0.0) -> pd.DataFrame:
     """All games on a specific date (YYYY-MM-DD, ET)."""
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT g.game_id, g.season_type, g.game_date, g.status,
@@ -136,7 +68,7 @@ def games_on_date(target_date: str, _mtime: float = 0.0) -> pd.DataFrame:
             FROM games g
             JOIN teams ht ON ht.team_id = g.home_team_id
             JOIN teams at ON at.team_id = g.away_team_id
-            WHERE g.game_date = %s
+            WHERE g.game_date = ?
             ORDER BY g.game_id
             """,
             conn, params=(target_date,),
@@ -145,7 +77,7 @@ def games_on_date(target_date: str, _mtime: float = 0.0) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def games_in_window(start_date: str, end_date: str, _mtime: float = 0.0) -> pd.DataFrame:
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT g.game_id, g.season_type, g.game_date, g.status,
@@ -155,7 +87,7 @@ def games_in_window(start_date: str, end_date: str, _mtime: float = 0.0) -> pd.D
             FROM games g
             JOIN teams ht ON ht.team_id = g.home_team_id
             JOIN teams at ON at.team_id = g.away_team_id
-            WHERE g.game_date BETWEEN %s AND %s
+            WHERE g.game_date BETWEEN ? AND ?
             ORDER BY g.game_date, g.game_id
             """,
             conn, params=(start_date, end_date),
@@ -165,18 +97,18 @@ def games_in_window(start_date: str, end_date: str, _mtime: float = 0.0) -> pd.D
 @st.cache_data(show_spinner=False)
 def latest_game_date(_mtime: float = 0.0) -> str | None:
     """Latest date with at least one Final game — useful when 'today' has no games yet."""
-    with closing(_connect()) as conn:
-        row = _fetchone(conn,
+    with _connect() as conn:
+        row = conn.execute(
             "SELECT MAX(game_date) AS d FROM games WHERE status = 'Final'"
-        )
+        ).fetchone()
     return row["d"] if row and row["d"] else None
 
 
 @st.cache_data(show_spinner=False)
 def latest_loaded_date(_mtime: float = 0.0) -> str | None:
     """Latest date in the games table regardless of status."""
-    with closing(_connect()) as conn:
-        row = _fetchone(conn, "SELECT MAX(game_date) AS d FROM games")
+    with _connect() as conn:
+        row = conn.execute("SELECT MAX(game_date) AS d FROM games").fetchone()
     return row["d"] if row and row["d"] else None
 
 
@@ -196,7 +128,7 @@ def quarter_scores_for_game(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
     Returns empty DataFrame if quarter data hasn't been backfilled for this game.
     """
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
             return pd.read_sql_query(
                 """
                 SELECT qs.team_id, t.abbreviation, t.full_name,
@@ -208,12 +140,12 @@ def quarter_scores_for_game(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
                 JOIN teams t ON t.team_id = qs.team_id
                 LEFT JOIN team_box_traditional tbt
                   ON tbt.game_id = qs.game_id AND tbt.team_id = qs.team_id
-                WHERE qs.game_id = %s
+                WHERE qs.game_id = ?
                 ORDER BY tbt.is_home DESC
                 """,
                 conn, params=(game_id,),
             )
-    except Exception:
+    except sqlite3.OperationalError:
         # Table doesn't exist yet (migration not applied)
         return pd.DataFrame()
 
@@ -221,7 +153,7 @@ def quarter_scores_for_game(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def game_team_box(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
     """Both teams' traditional + advanced merged for a single game."""
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT t.abbreviation, t.full_name, tbt.*,
@@ -232,7 +164,7 @@ def game_team_box(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
             JOIN teams t ON t.team_id = tbt.team_id
             LEFT JOIN team_box_advanced tba
               ON tba.game_id = tbt.game_id AND tba.team_id = tbt.team_id
-            WHERE tbt.game_id = %s
+            WHERE tbt.game_id = ?
             ORDER BY tbt.is_home DESC
             """,
             conn, params=(game_id,),
@@ -242,7 +174,7 @@ def game_team_box(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def game_player_box(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
     """Both teams' player box scores for a single game."""
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT t.abbreviation, p.full_name AS player_name, pbt.*,
@@ -253,7 +185,7 @@ def game_player_box(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
             JOIN players p ON p.player_id = pbt.player_id
             LEFT JOIN player_box_advanced pba
               ON pba.game_id = pbt.game_id AND pba.player_id = pbt.player_id
-            WHERE pbt.game_id = %s
+            WHERE pbt.game_id = ?
             ORDER BY t.abbreviation, pbt.is_starter DESC, pbt.minutes DESC
             """,
             conn, params=(game_id,),
@@ -316,9 +248,9 @@ def team_aggregate(team_id: int, window: str, season_filter: str = "both",
                     _mtime: float = 0.0) -> dict:
     """Return averages across the window for one team. Combines traditional + advanced."""
     last_n = WINDOW_TO_LAST_N[window]
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         cte = _team_recent_games_cte(team_id, last_n, season_filter)
-        row = _fetchone(conn,
+        row = conn.execute(
             cte + f"""
             SELECT
                 COUNT(*) AS gp,
@@ -351,7 +283,7 @@ def team_aggregate(team_id: int, window: str, season_filter: str = "both",
             JOIN team_box_traditional tbt ON tbt.game_id = r.game_id AND tbt.team_id = {team_id}
             LEFT JOIN team_box_advanced tba ON tba.game_id = r.game_id AND tba.team_id = {team_id}
             """
-        )
+        ).fetchone()
     return dict(row) if row else {}
 
 
@@ -360,14 +292,14 @@ def team_record(team_id: int, window: str, season_filter: str = "both",
                  _mtime: float = 0.0) -> tuple[int, int]:
     """W-L record across the window."""
     last_n = WINDOW_TO_LAST_N[window]
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         cte = _team_recent_games_cte(team_id, last_n, season_filter)
-        rows = _fetchall(conn,
+        rows = conn.execute(
             cte + f"""
             SELECT g.home_team_id, g.away_team_id, g.home_score, g.away_score
             FROM recent r JOIN games g ON g.game_id = r.game_id
             """
-        )
+        ).fetchall()
     w = l = 0
     for r in rows:
         team_pts = r["home_score"] if r["home_team_id"] == team_id else r["away_score"]
@@ -387,9 +319,9 @@ def team_opponent_aggregate(team_id: int, window: str, season_filter: str = "bot
     This drives the Defence layer: opp_pts allowed, opp eFG% allowed, etc.
     """
     last_n = WINDOW_TO_LAST_N[window]
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         cte = _team_recent_games_cte(team_id, last_n, season_filter)
-        row = _fetchone(conn,
+        row = conn.execute(
             cte + f"""
             SELECT
                 AVG(tbt.pts)    AS opp_pts,
@@ -408,7 +340,7 @@ def team_opponent_aggregate(team_id: int, window: str, season_filter: str = "bot
             JOIN team_box_traditional tbt ON tbt.game_id = r.game_id AND tbt.team_id = r.opp_id
             LEFT JOIN team_box_advanced tba ON tba.game_id = r.game_id AND tba.team_id = r.opp_id
             """
-        )
+        ).fetchone()
     return dict(row) if row else {}
 
 
@@ -417,28 +349,28 @@ def team_recent_games(team_id: int, last_n: int = 20, season_filter: str = "both
                        _mtime: float = 0.0) -> pd.DataFrame:
     """One row per game with both teams' summary — for trend charts."""
     season_clause = _season_filter_clause(season_filter)
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             f"""
             SELECT g.game_id, g.game_date, g.season_type,
-                   CASE WHEN g.home_team_id = %s THEN 'H' ELSE 'A' END AS site,
-                   CASE WHEN g.home_team_id = %s THEN g.away_team_id ELSE g.home_team_id END AS opp_id,
+                   CASE WHEN g.home_team_id = ? THEN 'H' ELSE 'A' END AS site,
+                   CASE WHEN g.home_team_id = ? THEN g.away_team_id ELSE g.home_team_id END AS opp_id,
                    tbt.pts, tbt.fg_pct, tbt.fg3_pct,
                    tba.off_rating, tba.def_rating, tba.net_rating, tba.pace,
                    tba.efg_pct, tba.ts_pct,
                    opp_tbt.pts AS opp_pts
             FROM games g
             JOIN team_box_traditional tbt
-              ON tbt.game_id = g.game_id AND tbt.team_id = %s
+              ON tbt.game_id = g.game_id AND tbt.team_id = ?
             LEFT JOIN team_box_advanced tba
-              ON tba.game_id = g.game_id AND tba.team_id = %s
+              ON tba.game_id = g.game_id AND tba.team_id = ?
             JOIN team_box_traditional opp_tbt
-              ON opp_tbt.game_id = g.game_id AND opp_tbt.team_id != %s
+              ON opp_tbt.game_id = g.game_id AND opp_tbt.team_id != ?
             WHERE g.status = 'Final'
-              AND (g.home_team_id = %s OR g.away_team_id = %s)
+              AND (g.home_team_id = ? OR g.away_team_id = ?)
               {season_clause}
             ORDER BY g.game_date DESC
-            LIMIT %s
+            LIMIT ?
             """,
             conn, params=(team_id, team_id, team_id, team_id, team_id, team_id, team_id, last_n),
         )
@@ -509,7 +441,7 @@ def upcoming_games(start_date: str, days: int = 7, _mtime: float = 0.0) -> pd.Da
     """
     from datetime import date, timedelta
     end_date = (date.fromisoformat(start_date) + timedelta(days=days)).isoformat()
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT g.game_id, g.season_type, g.game_date, g.status,
@@ -519,7 +451,7 @@ def upcoming_games(start_date: str, days: int = 7, _mtime: float = 0.0) -> pd.Da
             FROM games g
             JOIN teams ht ON ht.team_id = g.home_team_id
             JOIN teams at ON at.team_id = g.away_team_id
-            WHERE g.game_date BETWEEN %s AND %s
+            WHERE g.game_date BETWEEN ? AND ?
             ORDER BY g.game_date, g.game_id
             """,
             conn, params=(start_date, end_date),
@@ -537,14 +469,14 @@ def player_aggregate(player_id: int, window: str, season_filter: str = "both",
     last_n = WINDOW_TO_LAST_N[window]
     limit_clause = f"LIMIT {last_n}" if last_n else ""
     season_clause = _season_filter_clause(season_filter)
-    with closing(_connect()) as conn:
-        row = _fetchone(conn,
+    with _connect() as conn:
+        row = conn.execute(
             f"""
             WITH recent AS (
                 SELECT pbt.game_id, g.game_date
                 FROM player_box_traditional pbt
                 JOIN games g ON g.game_id = pbt.game_id
-                WHERE pbt.player_id = %s AND g.status = 'Final' AND pbt.minutes > 0
+                WHERE pbt.player_id = ? AND g.status = 'Final' AND pbt.minutes > 0
                   {season_clause}
                 ORDER BY g.game_date DESC
                 {limit_clause}
@@ -573,12 +505,12 @@ def player_aggregate(player_id: int, window: str, season_filter: str = "both",
                 SUM(pbt.is_starter) AS starts
             FROM recent r
             JOIN player_box_traditional pbt
-              ON pbt.game_id = r.game_id AND pbt.player_id = %s
+              ON pbt.game_id = r.game_id AND pbt.player_id = ?
             LEFT JOIN player_box_advanced pba
-              ON pba.game_id = r.game_id AND pba.player_id = %s
+              ON pba.game_id = r.game_id AND pba.player_id = ?
             """,
             (player_id, player_id, player_id),
-        )
+        ).fetchone()
     return dict(row) if row else {}
 
 
@@ -590,7 +522,7 @@ def league_player_table(window: str, min_games: int = 5, min_minutes: float = 12
     last_n = WINDOW_TO_LAST_N[window]
     limit_clause = f"LIMIT {last_n}" if last_n else ""
     season_clause = _season_filter_clause(season_filter)
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         df = pd.read_sql_query(
             f"""
             WITH game_filter AS (
@@ -693,12 +625,13 @@ def compute_player_ranks(df: pd.DataFrame) -> pd.DataFrame:
 def team_injuries(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
     """Current injuries for a team. Empty DataFrame if no data."""
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             return pd.read_sql_query(
                 """
                 SELECT player_name, status, detail, return_date, fetched_utc
                 FROM injuries
-                WHERE team_id = %s
+                WHERE team_id = ?
                 ORDER BY
                     CASE status
                         WHEN 'Out' THEN 1
@@ -713,7 +646,7 @@ def team_injuries(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
                 """,
                 conn, params=(team_id,),
             )
-    except Exception:
+    except sqlite3.OperationalError:
         return pd.DataFrame()
 
 
@@ -724,17 +657,18 @@ def all_team_injury_counts(_mtime: float = 0.0) -> dict[int, int]:
     Used for compact badges on Today page game cards.
     """
     try:
-        with closing(_connect()) as conn:
-            rows = _fetchall(conn,
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
                 """
                 SELECT team_id, COUNT(*) AS n
                 FROM injuries
                 WHERE status IN ('Out', 'Out For Season', 'Doubtful', 'Suspended')
                 GROUP BY team_id
                 """
-            )
+            ).fetchall()
             return {r["team_id"]: r["n"] for r in rows}
-    except Exception:
+    except sqlite3.OperationalError:
         return {}
 
 
@@ -742,18 +676,19 @@ def all_team_injury_counts(_mtime: float = 0.0) -> dict[int, int]:
 def team_news(team_id: int, limit: int = 5, _mtime: float = 0.0) -> pd.DataFrame:
     """Latest news headlines for a team. Empty DataFrame if no data."""
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             return pd.read_sql_query(
                 """
                 SELECT headline, summary, category, published_utc, url
                 FROM team_news
-                WHERE team_id = %s
+                WHERE team_id = ?
                 ORDER BY published_utc DESC
-                LIMIT %s
+                LIMIT ?
                 """,
                 conn, params=(team_id, limit),
             )
-    except Exception:
+    except sqlite3.OperationalError:
         return pd.DataFrame()
 
 
@@ -761,7 +696,8 @@ def team_news(team_id: int, limit: int = 5, _mtime: float = 0.0) -> pd.DataFrame
 def league_news(limit: int = 10, _mtime: float = 0.0) -> pd.DataFrame:
     """Latest news headlines across all teams. Used for Today landing."""
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             return pd.read_sql_query(
                 """
                 SELECT n.headline, n.summary, n.category, n.published_utc, n.url,
@@ -769,11 +705,11 @@ def league_news(limit: int = 10, _mtime: float = 0.0) -> pd.DataFrame:
                 FROM team_news n
                 JOIN teams t ON t.team_id = n.team_id
                 ORDER BY n.published_utc DESC
-                LIMIT %s
+                LIMIT ?
                 """,
                 conn, params=(limit,),
             )
-    except Exception:
+    except sqlite3.OperationalError:
         return pd.DataFrame()
 
 
@@ -784,7 +720,8 @@ def league_injuries_top(limit: int = 10, _mtime: float = 0.0) -> pd.DataFrame:
     Used for the "League injury watch" panel on Today landing.
     """
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             return pd.read_sql_query(
                 """
                 SELECT i.player_name, i.status, i.detail, i.team_id,
@@ -802,11 +739,11 @@ def league_injuries_top(limit: int = 10, _mtime: float = 0.0) -> pd.DataFrame:
                         ELSE 4
                     END,
                     i.player_name
-                LIMIT %s
+                LIMIT ?
                 """,
                 conn, params=(limit,),
             )
-    except Exception:
+    except sqlite3.OperationalError:
         return pd.DataFrame()
 
 
@@ -875,14 +812,15 @@ def stat_leaders(stat: str, season_filter: str = "reg",
         JOIN teams t ON t.team_id = pbt.team_id
         WHERE pbt.minutes IS NOT NULL AND pbt.minutes > 0 {season_clause}
         GROUP BY pbt.player_id, pbt.team_id
-        HAVING COUNT(*) >= %s
+        HAVING COUNT(*) >= ?
         ORDER BY value DESC
-        LIMIT %s
+        LIMIT ?
     """
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             return pd.read_sql_query(sql, conn, params=(min_games, top_n))
-    except Exception:
+    except sqlite3.OperationalError:
         return pd.DataFrame()
 
 
@@ -893,17 +831,18 @@ def closing_line_for_game(game_id: str, _mtime: float = 0.0) -> dict:
     Returns dict with: spread (str), total (str), or empty dict if no odds.
     """
     try:
-        with closing(_connect()) as conn:
+        with sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
             # Take the latest snapshot per market for this game, prefer DraftKings
-            row = _fetchall(conn,
+            row = conn.execute(
                 """
                 SELECT market, point, name, price, home_team, away_team
                 FROM odds_snapshots
-                WHERE game_id = %s
+                WHERE game_id = ?
                 ORDER BY snapshot_utc DESC
                 """,
                 (game_id,),
-            )
+            ).fetchall()
             if not row:
                 return {}
             # Group by market, take first (= most recent)
@@ -925,7 +864,7 @@ def closing_line_for_game(game_id: str, _mtime: float = 0.0) -> dict:
             if total_pt is not None:
                 out["total"] = f"{total_pt:.1f}"
             return out
-    except Exception:
+    except sqlite3.OperationalError:
         return {}
 
 
@@ -943,17 +882,17 @@ def team_rest_days(team_id: int, game_date: str, _mtime: float = 0.0) -> int | N
       Team played 2 days ago, game today -> 1
       First game of season -> None (returns None to display as "—")
     """
-    with closing(_connect()) as conn:
-        row = _fetchone(conn,
+    with _connect() as conn:
+        row = conn.execute(
             """
             SELECT MAX(g.game_date) AS prior_date
             FROM games g
-            WHERE (g.home_team_id = %s OR g.away_team_id = %s)
+            WHERE (g.home_team_id = ? OR g.away_team_id = ?)
               AND g.status = 'Final'
-              AND g.game_date < %s
+              AND g.game_date < ?
             """,
             (team_id, team_id, game_date),
-        )
+        ).fetchone()
     if not row or not row["prior_date"]:
         return None
     from datetime import date
@@ -972,7 +911,7 @@ def team_rest_days(team_id: int, game_date: str, _mtime: float = 0.0) -> int | N
 @st.cache_data(show_spinner=False)
 def head_to_head(team_a_id: int, team_b_id: int, _mtime: float = 0.0) -> pd.DataFrame:
     """All games this season between the two teams."""
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT g.game_id, g.game_date, g.season_type,
@@ -983,8 +922,8 @@ def head_to_head(team_a_id: int, team_b_id: int, _mtime: float = 0.0) -> pd.Data
             JOIN teams ht ON ht.team_id = g.home_team_id
             JOIN teams at ON at.team_id = g.away_team_id
             WHERE g.status = 'Final'
-              AND ((g.home_team_id = %s AND g.away_team_id = %s)
-                OR (g.home_team_id = %s AND g.away_team_id = %s))
+              AND ((g.home_team_id = ? AND g.away_team_id = ?)
+                OR (g.home_team_id = ? AND g.away_team_id = ?))
             ORDER BY g.game_date DESC
             """,
             conn, params=(team_a_id, team_b_id, team_b_id, team_a_id),
@@ -994,15 +933,15 @@ def head_to_head(team_a_id: int, team_b_id: int, _mtime: float = 0.0) -> pd.Data
 @st.cache_data(show_spinner=False)
 def last_starting_lineup(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
     """Most recent game's starters — proxy for likely starters tonight."""
-    with closing(_connect()) as conn:
-        latest = _fetchone(conn,
+    with _connect() as conn:
+        latest = conn.execute(
             """
             SELECT g.game_id FROM games g
-            WHERE g.status = 'Final' AND (g.home_team_id = %s OR g.away_team_id = %s)
+            WHERE g.status = 'Final' AND (g.home_team_id = ? OR g.away_team_id = ?)
             ORDER BY g.game_date DESC LIMIT 1
             """,
             (team_id, team_id),
-        )
+        ).fetchone()
         if not latest:
             return pd.DataFrame()
         return pd.read_sql_query(
@@ -1010,7 +949,7 @@ def last_starting_lineup(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
             SELECT p.full_name AS player, pbt.minutes, pbt.pts, pbt.reb, pbt.ast
             FROM player_box_traditional pbt
             JOIN players p ON p.player_id = pbt.player_id
-            WHERE pbt.game_id = %s AND pbt.team_id = %s AND pbt.is_starter = 1
+            WHERE pbt.game_id = ? AND pbt.team_id = ? AND pbt.is_starter = 1
             ORDER BY pbt.minutes DESC
             """,
             conn, params=(latest["game_id"], team_id),
@@ -1029,16 +968,16 @@ def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
     will_absorb: True if this player is in the top 3 minutes-eaters AND
         someone with significant L5 minutes (>15) is OUT/DOUBTFUL on the team.
     """
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         # Latest game for the team
-        latest = _fetchone(conn,
+        latest = conn.execute(
             """
             SELECT g.game_id FROM games g
-            WHERE g.status = 'Final' AND (g.home_team_id = %s OR g.away_team_id = %s)
+            WHERE g.status = 'Final' AND (g.home_team_id = ? OR g.away_team_id = ?)
             ORDER BY g.game_date DESC LIMIT 1
             """,
             (team_id, team_id),
-        )
+        ).fetchone()
         if not latest:
             return pd.DataFrame()
 
@@ -1051,7 +990,7 @@ def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
                    pbt.minutes AS last_min, pbt.is_starter AS is_starter_last
             FROM player_box_traditional pbt
             JOIN players p ON p.player_id = pbt.player_id
-            WHERE pbt.game_id = %s AND pbt.team_id = %s
+            WHERE pbt.game_id = ? AND pbt.team_id = ?
             ORDER BY pbt.minutes DESC
             """,
             conn, params=(last_game_id, team_id),
@@ -1064,7 +1003,7 @@ def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
         recent_games = pd.read_sql_query(
             """
             SELECT g.game_id FROM games g
-            WHERE g.status = 'Final' AND (g.home_team_id = %s OR g.away_team_id = %s)
+            WHERE g.status = 'Final' AND (g.home_team_id = ? OR g.away_team_id = ?)
             ORDER BY g.game_date DESC LIMIT 5
             """,
             conn, params=(team_id, team_id),
@@ -1072,7 +1011,7 @@ def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
         if recent_games.empty:
             return pd.DataFrame()
         recent_ids = recent_games["game_id"].tolist()
-        placeholders = ",".join("%s" * len(recent_ids))
+        placeholders = ",".join("?" * len(recent_ids))
 
         l5_stats = pd.read_sql_query(
             f"""
@@ -1081,7 +1020,7 @@ def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
                    AVG(pbt.plus_minus) AS l5_pm,
                    COUNT(*) AS l5_gp
             FROM player_box_traditional pbt
-            WHERE pbt.team_id = %s AND pbt.game_id IN ({placeholders})
+            WHERE pbt.team_id = ? AND pbt.game_id IN ({placeholders})
               AND pbt.minutes IS NOT NULL
             GROUP BY pbt.player_id
             """,
@@ -1149,7 +1088,7 @@ def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def odds_for_game(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
     """All odds_snapshots rows for a specific NBA game_id."""
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT fetched_utc, snapshot_phase, bookmaker, market,
@@ -1159,7 +1098,7 @@ def odds_for_game(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
                    commence_time_utc, home_team_name, away_team_name,
                    bookmaker_last_update
             FROM odds_snapshots
-            WHERE game_id = %s
+            WHERE game_id = ?
             ORDER BY fetched_utc, bookmaker, market
             """,
             conn, params=(game_id,),
@@ -1169,7 +1108,7 @@ def odds_for_game(game_id: str, _mtime: float = 0.0) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def odds_for_event(event_id: str, _mtime: float = 0.0) -> pd.DataFrame:
     """Same but by The Odds API event_id (for unmatched games)."""
-    with closing(_connect()) as conn:
+    with _connect() as conn:
         return pd.read_sql_query(
             """
             SELECT fetched_utc, snapshot_phase, bookmaker, market,
@@ -1179,7 +1118,7 @@ def odds_for_event(event_id: str, _mtime: float = 0.0) -> pd.DataFrame:
                    commence_time_utc, home_team_name, away_team_name,
                    bookmaker_last_update
             FROM odds_snapshots
-            WHERE event_id = %s
+            WHERE event_id = ?
             ORDER BY fetched_utc, bookmaker, market
             """,
             conn, params=(event_id,),
@@ -1189,8 +1128,8 @@ def odds_for_event(event_id: str, _mtime: float = 0.0) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def latest_odds_snapshot(_mtime: float = 0.0) -> str | None:
     """When was the last odds fetch, in UTC ISO."""
-    with closing(_connect()) as conn:
-        row = _fetchone(conn,
+    with _connect() as conn:
+        row = conn.execute(
             "SELECT MAX(fetched_utc) AS t FROM odds_snapshots"
-        )
+        ).fetchone()
     return row["t"] if row and row["t"] else None

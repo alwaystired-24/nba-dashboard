@@ -40,14 +40,19 @@ if not DB_PATH.exists():
 
 mtime = db_mtime()
 last_data_date = latest_loaded_date(_mtime=mtime)
-mtime_dt = datetime.fromtimestamp(mtime, tz=HKT)
+# mtime is now an ISO timestamp string (Postgres MAX(last_attempt_utc))
+# rather than a float (file mtime). Parse to datetime in HKT for display.
+try:
+    mtime_dt = datetime.fromisoformat(mtime).astimezone(HKT) if mtime else None
+except (ValueError, TypeError):
+    mtime_dt = None
 
 # Stale-data warnings (schedule + orphan odds)
 show_freshness_banner(mtime)
 
 with st.container(border=True):
     cols = st.columns(3)
-    cols[0].metric("Last DB update (HKT)", mtime_dt.strftime("%a %d %b %H:%M"))
+    cols[0].metric("Last DB update (HKT)", mtime_dt.strftime("%a %d %b %H:%M") if mtime_dt else "unknown")
     cols[1].metric("Latest game date in DB", last_data_date or "—")
     cols[2].metric("Now", hkt_now_label())
 
