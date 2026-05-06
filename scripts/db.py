@@ -45,13 +45,23 @@ def connect() -> Iterator[tuple]:
 
     Commits on clean exit, rolls back on exception, always closes.
     """
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(
+    DATABASE_URL,
+    keepalives=1,
+    keepalives_idle=30,
+    keepalives_interval=10,
+    keepalives_count=5,
+    connect_timeout=10,
+)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         yield conn, cur
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         raise
     finally:
         cur.close()
