@@ -1,0 +1,3 @@
+[submodule "external/nba-data"]
+	path = external/nba-data
+	url = git@github.com:alwaystired-24/nba-data.git
