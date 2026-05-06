@@ -4,7 +4,7 @@
 
 set -e
 
-REPO="/Users/edwardlam/Documents/thefifthquarter/01-data-foundation/nba-dashboard"
+REPO="/Users/edwardlam/Documents/thefifthquarter/nba-project/nba-dashboard"
 LOG="$HOME/Library/Logs/nba-dashboard-daily.log"
 
 # Append timestamped header
@@ -12,7 +12,7 @@ echo "" >> "$LOG"
 echo "==== $(date) — daily run start ====" >> "$LOG"
 
 cd "$REPO"
-source .venv/bin/activate
+source /Users/edwardlam/.venvs/nba-dashboard/bin/activate
 
 # Load .env if present (THE_ODDS_API_KEY etc.)
 if [ -f .env ]; then
@@ -22,6 +22,4 @@ if [ -f .env ]; then
 fi
 
 # Run daily ETL — captures both stdout and stderr
-.venv/bin/python -m scripts.run daily >> "$LOG" 2>&1 || echo "daily exited non-zero: $?" >> "$LOG"
-
-echo "==== $(date) — done ====" >> "$LOG"
+/Users/edwardlam/.venvs/nba-dashboard/bin/python -m scripts.run daily >> "$LOG" 2>&1 || echo "daily exited non-zero: $?" >> "$LOG"
