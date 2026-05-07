@@ -78,3 +78,4 @@ streamlit run dashboard/app.py
 **"No database found" on dashboard load** → run `python -m scripts.run init` then `python -m scripts.run backfill`.
 
 **Want to start over from scratch** → `rm data/nba.db` then re-run init + backfill.
+# isolation test
