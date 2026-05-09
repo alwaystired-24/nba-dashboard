@@ -857,7 +857,11 @@ def _format_stat_value(value: float | None, fmt: str) -> str:
     if value is None or pd.isna(value):
         return "—"
     if fmt == ".1%":
+        # Ratio (0-1) -> percentage display
         return f"{value * 100:.1f}%"
+    if fmt == ".1pct":
+        # Already-percentaged (e.g. tov_pct stored as 13.5 = 13.5%)
+        return f"{value:.1f}%"
     return f"{value:{fmt}}"
 
 

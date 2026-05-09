@@ -523,7 +523,9 @@ STAT_LABELS: dict[str, tuple[str, str]] = {
     "pace": ("Pace", ".1f"),
     "efg_pct": ("eFG%", ".1%"),
     "ts_pct": ("TS%", ".1%"),
-    "tov_pct": ("TOV%", ".1%"),
+    # NBA stats API quirk: tov_pct is stored already-percentaged (e.g. 13.5
+    # means 13.5%), not as a 0-1 ratio like the others. ".1pct" handles that.
+    "tov_pct": ("TOV%", ".1pct"),
     "oreb_pct": ("OREB%", ".1%"),
     "dreb_pct": ("DREB%", ".1%"),
     "ast_pct": ("AST%", ".1%"),
@@ -536,7 +538,8 @@ STAT_LABELS: dict[str, tuple[str, str]] = {
     "opp_fga": ("OPP FGA", ".1f"),
     "opp_efg_pct": ("OPP eFG%", ".1%"),
     "opp_ts_pct": ("OPP TS%", ".1%"),
-    "opp_tov_pct": ("OPP TOV%", ".1%"),
+    # Same as tov_pct — already-percentaged
+    "opp_tov_pct": ("OPP TOV%", ".1pct"),
     "opp_reb": ("OPP REB", ".1f"),
     "opp_oreb": ("OPP OREB", ".1f"),
     "opp_ast": ("OPP AST", ".1f"),
@@ -1154,7 +1157,10 @@ def team_minutes_forecast(team_id: int, _mtime: float = 0.0) -> pd.DataFrame:
         if recent_games.empty:
             return pd.DataFrame()
         recent_ids = recent_games["game_id"].tolist()
-        placeholders = ",".join("%s" * len(recent_ids))
+        # NOTE: list brackets are required. ",".join("%s" * n) iterates the
+        # string char-by-char and produces "%,s,%,s,...". Leftover bug from
+        # the SQLite (?) -> Postgres (%s) migration where ? was 1 char.
+        placeholders = ",".join(["%s"] * len(recent_ids))
 
         l5_stats = pd.read_sql_query(
             f"""
