@@ -490,6 +490,88 @@ def compute_team_ranks(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# =========================================================================
+# PERCENTILE COMPUTATION (Edge Finder Phase A)
+# =========================================================================
+
+# Display label + format code for each stat. Used by Edge Finder Phase A
+# to render readable team stat tables.
+#   ".1f"  -> float with 1 decimal
+#   ".0f"  -> integer
+#   ".1%"  -> ratio shown as percentage (multiply by 100, 1 decimal)
+STAT_LABELS: dict[str, tuple[str, str]] = {
+    # General — scoring
+    "pts": ("Points", ".1f"),
+    "fg_pct": ("FG%", ".1%"),
+    "fg3_pct": ("3P%", ".1%"),
+    "ft_pct": ("FT%", ".1%"),
+    "fga": ("FGA", ".1f"),
+    "fg3a": ("3PA", ".1f"),
+    # General — possession & ball control
+    "reb": ("REB", ".1f"),
+    "oreb": ("OREB", ".1f"),
+    "dreb": ("DREB", ".1f"),
+    "ast": ("AST", ".1f"),
+    "stl": ("STL", ".1f"),
+    "blk": ("BLK", ".1f"),
+    "tov": ("TOV", ".1f"),
+    "pf": ("Personal Fouls", ".1f"),
+    # Advanced
+    "off_rating": ("OFF Rating", ".1f"),
+    "def_rating": ("DEF Rating", ".1f"),
+    "net_rating": ("NET Rating", ".1f"),
+    "pace": ("Pace", ".1f"),
+    "efg_pct": ("eFG%", ".1%"),
+    "ts_pct": ("TS%", ".1%"),
+    "tov_pct": ("TOV%", ".1%"),
+    "oreb_pct": ("OREB%", ".1%"),
+    "dreb_pct": ("DREB%", ".1%"),
+    "ast_pct": ("AST%", ".1%"),
+    "poss": ("Possessions", ".1f"),
+    # Opponent allowed (defense)
+    "opp_pts": ("OPP PTS", ".1f"),
+    "opp_fg_pct": ("OPP FG%", ".1%"),
+    "opp_fg3_pct": ("OPP 3P%", ".1%"),
+    "opp_fg3a": ("OPP 3PA", ".1f"),
+    "opp_fga": ("OPP FGA", ".1f"),
+    "opp_efg_pct": ("OPP eFG%", ".1%"),
+    "opp_ts_pct": ("OPP TS%", ".1%"),
+    "opp_tov_pct": ("OPP TOV%", ".1%"),
+    "opp_reb": ("OPP REB", ".1f"),
+    "opp_oreb": ("OPP OREB", ".1f"),
+    "opp_ast": ("OPP AST", ".1f"),
+    "opp_tov": ("OPP TOV", ".1f"),
+}
+
+
+def compute_team_percentiles(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a `<stat>_pct` column (0-100, higher=better) for each numeric stat.
+
+    Inverts for stats in LOWER_IS_BETTER so e.g. a low DEF Rating lands at
+    a HIGH percentile. Used by Edge Finder Phase A to surface each team's
+    top-N percentile-ranked stats vs the rest of the league.
+
+    NaN values get NaN percentile (excluded from top-N selection).
+    """
+    out = df.copy()
+    skip = {"team_id", "abbr", "team", "gp", "w", "l"}
+    for col in df.columns:
+        if col in skip or not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        ascending = col in LOWER_IS_BETTER
+        # rank with NaN at bottom; non-NaN ranks span 1..n
+        ranks = df[col].rank(method="min", ascending=ascending, na_option="bottom")
+        n = int(df[col].notna().sum())
+        if n < 2:
+            out[f"{col}_pct"] = pd.NA
+            continue
+        # rank 1 (best) -> 100; rank n (worst) -> 0
+        pct = (n - ranks) / (n - 1) * 100
+        # mask back to NaN where the original value was NaN
+        out[f"{col}_pct"] = pct.where(df[col].notna()).round(0)
+    return out
+
+
 def compute_league_averages(df: pd.DataFrame) -> dict:
     """Mean of every numeric column across the team table — for the bottom row."""
     out = {}

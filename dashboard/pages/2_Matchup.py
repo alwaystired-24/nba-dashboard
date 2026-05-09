@@ -17,6 +17,8 @@ import streamlit as st
 
 
 from lib.data import (
+    STAT_LABELS,
+    compute_team_percentiles,
     db_mtime,
     games_in_window,
     head_to_head,
@@ -32,6 +34,7 @@ from lib.data import (
     team_injuries,
     team_news,
 )
+from lib.coloring import style_dataframe_by_percentiles
 from lib.freshness import show_freshness_banner
 from lib.filters import window_picker, season_filter_picker, SEASON_FILTER_LABELS
 from lib.format import (
@@ -833,108 +836,119 @@ with ccols[1]: _trend(home_id, home["full_name"], "#d62728")
 st.divider()
 
 # =========================================================================
-# Edge Finder — expanded with league avg
+# Edge Finder — Phase A: top-10 percentile ranks per team
 # =========================================================================
 st.subheader("⚔️ Edge Finder")
 st.caption(
-    f"Each team's offence vs the other team's defence ({window} averages). "
-    "League average shown for context. Bigger gaps = bigger edges."
+    f"Each team's 10 highest percentile ranks across the league ({window} averages). "
+    "Combines general, advanced, and opponent-allowed stats. "
+    "Higher %ile = where the team is most elite vs the rest of the league."
 )
 
-a_off = team_aggregate(away_id, window, season_filter, _mtime=mtime)
-a_def = team_opponent_aggregate(away_id, window, season_filter, _mtime=mtime)
-h_off = team_aggregate(home_id, window, season_filter, _mtime=mtime)
-h_def = team_opponent_aggregate(home_id, window, season_filter, _mtime=mtime)
 
-# (label, away_offense_value, home_defense_allowed, home_offense_value, away_defense_allowed, league_avg, format_fn)
-def _pct(x): return fmt_pct(x)
-def _num(x): return fmt_num(x)
-
-edge_rows = [
-    ("ORtg vs DRtg", a_off.get("off_rating"), h_off.get("def_rating"),
-     h_off.get("off_rating"), a_off.get("def_rating"), lg.get("off_rating"), _num),
-    ("eFG% vs OPP eFG%", a_off.get("efg_pct"), h_def.get("opp_efg_pct"),
-     h_off.get("efg_pct"), a_def.get("opp_efg_pct"), lg.get("efg_pct"), _pct),
-    ("TS% vs OPP TS%", a_off.get("ts_pct"), h_def.get("opp_ts_pct"),
-     h_off.get("ts_pct"), a_def.get("opp_ts_pct"), lg.get("ts_pct"), _pct),
-    ("3P% vs OPP 3P%", a_off.get("fg3_pct"), h_def.get("opp_fg3_pct"),
-     h_off.get("fg3_pct"), a_def.get("opp_fg3_pct"), lg.get("fg3_pct"), _pct),
-    ("OREB vs OPP OREB", a_off.get("oreb"), h_def.get("opp_oreb"),
-     h_off.get("oreb"), a_def.get("opp_oreb"), lg.get("oreb"), _num),
-    ("Fouls drawn", a_off.get("pf"), None,  # FT-related; we proxy with personal fouls per team
-     h_off.get("pf"), None, lg.get("pf"), _num),
-    ("Pace", a_off.get("pace"), None,
-     h_off.get("pace"), None, lg.get("pace"), _num),
-]
-
-table_rows = []
-edge_meta = []  # parallel list: (away_off_diff_norm, home_off_diff_norm) for coloring
-for metric, ao, hd, ho, ad, lavg, fmtfn in edge_rows:
-    table_rows.append({
-        "Metric": metric,
-        f"{away['abbreviation']} OFF": fmtfn(ao),
-        f"{home['abbreviation']} D allowed": fmtfn(hd) if hd is not None else "—",
-        f"{home['abbreviation']} OFF": fmtfn(ho),
-        f"{away['abbreviation']} D allowed": fmtfn(ad) if ad is not None else "—",
-        "League avg": fmtfn(lavg) if lavg is not None else "—",
-    })
-    # Compute edge size for coloring: deviation from league avg in both directions
-    edge_meta.append({
-        "ao": ao, "hd": hd, "ho": ho, "ad": ad, "lavg": lavg,
-    })
-
-edge_df = pd.DataFrame(table_rows)
+@st.cache_data(show_spinner=False)
+def _league_table_with_pct(window: str, season_filter: str, _mtime: float):
+    """League-wide team table with percentile columns added (one per stat)."""
+    df = league_team_table(window, season_filter, _mtime=_mtime)
+    return compute_team_percentiles(df)
 
 
-# Color cells based on size of deviation from league avg
-def _edge_style(row: pd.Series) -> list[str]:
-    """Color row based on how far each cell's value is from league avg."""
-    styles = [""] * len(row)
-    meta = edge_meta[row.name]  # row.name is the index
-    lavg = meta["lavg"]
-    if lavg is None or pd.isna(lavg):
-        return styles
+def _format_stat_value(value: float | None, fmt: str) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    if fmt == ".1%":
+        return f"{value * 100:.1f}%"
+    return f"{value:{fmt}}"
 
-    # Map column index by name
-    col_keys = {
-        f"{away['abbreviation']} OFF": ("ao", False),  # higher is better (offense)
-        f"{home['abbreviation']} D allowed": ("hd", True),   # lower is better (defense)
-        f"{home['abbreviation']} OFF": ("ho", False),
-        f"{away['abbreviation']} D allowed": ("ad", True),
-    }
-    # Pace and Fouls have no clear good/bad direction — neutralize
-    is_neutral_metric = row["Metric"] in ("Pace", "Fouls drawn")
 
-    for col_name, (key, lower_better) in col_keys.items():
-        if col_name not in row.index:
+def _build_top10_for_team(
+    team_id: int, lg_pct_df: pd.DataFrame, lg_means: dict
+) -> pd.DataFrame:
+    """Top 10 percentile-ranked stats for one team, descending by %ile."""
+    team_row = lg_pct_df[lg_pct_df["team_id"] == team_id]
+    if team_row.empty:
+        return pd.DataFrame()
+    row = team_row.iloc[0]
+
+    rows = []
+    for stat_col, (label, fmt) in STAT_LABELS.items():
+        pct_col = f"{stat_col}_pct"
+        if stat_col not in row.index or pct_col not in row.index:
             continue
-        val = meta.get(key)
-        if val is None or pd.isna(val):
+        value = row[stat_col]
+        pct = row[pct_col]
+        if pd.isna(value) or pd.isna(pct):
             continue
-        diff = val - lavg
-        if lower_better:
-            diff = -diff
-        # Threshold the deviation: ratio metrics use 0.02 (=2pp), absolute use ~3 units
-        # Auto-detect: if league avg < 1.5, treat as ratio
-        threshold_big = 0.025 if abs(lavg) < 1.5 else 3.0
-        threshold_small = 0.012 if abs(lavg) < 1.5 else 1.5
+        lg_avg = lg_means.get(stat_col)
+        rows.append({
+            "Stat": label,
+            "Value": _format_stat_value(value, fmt),
+            "%ile": int(pct),
+            "Lg avg": _format_stat_value(lg_avg, fmt),
+            "_value_raw": float(value),  # tie-breaker only, dropped before render
+        })
 
-        col_idx = row.index.get_loc(col_name)
-        if is_neutral_metric:
-            continue
-        if diff > threshold_big:
-            styles[col_idx] = "background-color: rgba(62,168,102,0.30); color: #0E1525; font-weight: 600;"
-        elif diff > threshold_small:
-            styles[col_idx] = "background-color: rgba(62,168,102,0.18); color: #5FBE85; font-weight: 600;"
-        elif diff < -threshold_big:
-            styles[col_idx] = "background-color: rgba(200,70,70,0.30); color: #0E1525; font-weight: 600;"
-        elif diff < -threshold_small:
-            styles[col_idx] = "background-color: rgba(200,70,70,0.18); color: #E37070; font-weight: 600;"
-    return styles
+    if not rows:
+        return pd.DataFrame()
 
-styler = edge_df.style.apply(_edge_style, axis=1)
-st.dataframe(styler, hide_index=True, width="stretch")
-st.caption("🟢 = team has edge over league avg · 🔴 = below league avg · brighter = bigger edge")
+    df_out = pd.DataFrame(rows)
+    df_out = (
+        df_out.sort_values(["%ile", "_value_raw"], ascending=[False, False])
+              .head(10)
+              .reset_index(drop=True)
+    )
+    df_out.insert(0, "#", range(1, len(df_out) + 1))
+    df_out = df_out.drop(columns=["_value_raw"])
+    return df_out
+
+
+def _render_team_top10(
+    team_id: int, team_label: str, gp: int,
+    lg_pct_df: pd.DataFrame, lg_means: dict,
+):
+    st.markdown(f"#### {team_label}")
+    if 0 < gp < 5:
+        st.caption(f"⚠️ Small sample ({gp} games)")
+
+    df_top = _build_top10_for_team(team_id, lg_pct_df, lg_means)
+    if df_top.empty:
+        st.info("No stats available for this team in the current window.")
+        return
+
+    styler = style_dataframe_by_percentiles(df_top, {"%ile": "%ile"})
+    st.dataframe(
+        styler,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "#": st.column_config.NumberColumn("#", width=30, format="%d"),
+            "Stat": st.column_config.TextColumn("Stat", width=160),
+            "Value": st.column_config.TextColumn("Value", width=80),
+            "%ile": st.column_config.NumberColumn("%ile", width=60, format="%d"),
+            "Lg avg": st.column_config.TextColumn("Lg avg", width=80),
+        },
+    )
+
+
+lg_pct_df = _league_table_with_pct(window, season_filter, _mtime=mtime)
+
+away_gp = int(team_aggregate(away_id, window, season_filter, _mtime=mtime).get("gp") or 0)
+home_gp = int(team_aggregate(home_id, window, season_filter, _mtime=mtime).get("gp") or 0)
+
+ef_cols = st.columns(2)
+with ef_cols[0]:
+    _render_team_top10(
+        away_id, f"✈️ {away['full_name']}", away_gp, lg_pct_df, lg
+    )
+with ef_cols[1]:
+    _render_team_top10(
+        home_id, f"🏠 {home['full_name']}", home_gp, lg_pct_df, lg
+    )
+
+st.caption(
+    "Phase A — surfaces what each team is most elite at vs the league. "
+    "Phase B (\"What Changed\" delta view) coming next."
+)
 
 st.divider()
 
