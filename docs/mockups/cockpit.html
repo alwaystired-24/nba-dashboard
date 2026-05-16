@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — Cockpit</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+<style>
+:root {
+  --bg-primary: #0E1525;
+  --bg-secondary: #172033;
+  --bg-tertiary: #25304a;
+  --text-primary: #E5E9F0;
+  --text-secondary: #8B95A8;
+  --text-tertiary: #5F6B82;
+  --accent: #F4A742;
+  --success: #5FBE85;
+  --danger: #E37070;
+  --warning: #F4A742;
+  --info: #5FA8F4;
+  --border-tertiary: rgba(229,233,240,0.10);
+  --border-secondary: rgba(229,233,240,0.18);
+  --bg-success: rgba(95,190,133,0.18);
+  --bg-danger: rgba(227,112,112,0.18);
+  --bg-warning: rgba(244,167,66,0.18);
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 24px; background: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; }
+.frame { max-width: 1400px; margin: 0 auto; }
+.ck-bar { display: flex; align-items: center; gap: 16px; padding: 12px 16px; border: 0.5px solid var(--border-tertiary); border-radius: var(--radius-md); background: var(--bg-secondary); margin-bottom: 14px; }
+.ck-bar-left { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-secondary); flex-shrink: 0; }
+.ck-bar-search { flex: 1; }
+.ck-bar-search input { width: 100%; height: 32px; padding: 0 12px; border: 0.5px solid var(--border-tertiary); border-radius: var(--radius-md); background: var(--bg-primary); color: var(--text-primary); font-size: 13px; font-family: inherit; }
+.ck-bar-search input::placeholder { color: var(--text-tertiary); }
+.ck-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; margin-bottom: 14px; }
+.ck-sec { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 14px 16px; }
+.sec-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-bottom: 10px; font-weight: 500; }
+.gcard { background: rgba(255,255,255,0.02); border: 0.5px solid var(--border-tertiary); border-radius: var(--radius-md); padding: 10px 12px; margin-bottom: 10px; }
+.gcard:last-child { margin-bottom: 0; }
+.gh { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.team { font-weight: 500; font-size: 14px; }
+.tip { color: var(--text-tertiary); font-size: 11px; }
+.edge { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+.edge .v { color: var(--success); font-weight: 500; font-size: 11px; min-width: 34px; }
+.edge .v.bad { color: var(--danger); }
+.edge .v.warn { color: var(--warning); }
+.trow { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 0.5px solid var(--border-tertiary); font-size: 13px; gap: 8px; }
+.trow:last-child { border: none; }
+.tl { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.tt { font-weight: 500; min-width: 36px; font-size: 13px; }
+.tx { color: var(--text-secondary); flex: 1; min-width: 0; }
+.spark { color: var(--info); }
+.chip { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 500; }
+.chip-up { background: var(--bg-success); color: var(--success); }
+.chip-down { background: var(--bg-danger); color: var(--danger); }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { text-align: left; font-weight: 500; font-size: 11px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.06em; padding: 8px 10px; border-bottom: 0.5px solid var(--border-tertiary); }
+.tbl td { padding: 8px 10px; border-bottom: 0.5px solid var(--border-tertiary); }
+.tbl tr:last-child td { border-bottom: none; }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <div class="ck-bar">
+    <div class="ck-bar-left">
+      <i class="ti ti-calendar" aria-hidden="true"></i>
+      <span>Wed 18 Mar &middot; 8 games</span>
+      <span style="opacity: 0.4">&middot;</span>
+      <i class="ti ti-database" aria-hidden="true"></i>
+      <span>fresh 12:40 HKT</span>
+    </div>
+    <div class="ck-bar-search">
+      <input type="text" placeholder="Search team or player  &middot;  Cmd+K" />
+    </div>
+  </div>
+
+  <div class="ck-grid">
+
+    <div class="ck-sec">
+      <div class="sec-lbl">Tonight's slate</div>
+
+      <div class="gcard">
+        <div class="gh">
+          <span class="team">NYK <span style="opacity:0.5">@</span> BOS</span>
+          <span class="tip">8:00 PM ET</span>
+        </div>
+        <div class="edge"><span class="v">+95</span><span>BOS OPP eFG% allowed (top 5 league this week)</span></div>
+        <div class="edge"><span class="v">+4.2</span><span>NYK pace shift over L10 vs prior L10</span></div>
+        <div class="edge"><span class="v bad">2 OUT</span><span>BOS &middot; Brown, Holiday &middot; redistributes 64 min</span></div>
+      </div>
+
+      <div class="gcard">
+        <div class="gh">
+          <span class="team">DEN <span style="opacity:0.5">@</span> OKC</span>
+          <span class="tip">9:30 PM ET</span>
+        </div>
+        <div class="edge"><span class="v">3.1pp</span><span>OKC OPP 3P% best since trade deadline</span></div>
+        <div class="edge"><span class="v warn">B2B</span><span>DEN 2nd of back-to-back, 3rd road game</span></div>
+        <div class="edge"><span class="v">+88</span><span>DEN OFF Rtg 119.2 in L10  &middot;  92nd %ile</span></div>
+      </div>
+
+      <div class="gcard">
+        <div class="gh">
+          <span class="team">PHX <span style="opacity:0.5">@</span> GSW</span>
+          <span class="tip">10:00 PM ET</span>
+        </div>
+        <div class="edge"><span class="v">+6.2</span><span>GSW pace over L10  &middot;  fastest team this stretch</span></div>
+        <div class="edge"><span class="v">+85</span><span>PHX TS% 60.3  &middot;  84th %ile</span></div>
+        <div class="edge"><span class="v warn">soft</span><span>both teams below league avg DEF L10</span></div>
+      </div>
+    </div>
+
+    <div class="ck-sec">
+      <div class="sec-lbl">League ticker  &middot;  auto-insights</div>
+
+      <div class="trow">
+        <div class="tl"><span class="tt">PHI</span><span class="tx">OFF Rtg +5.1 over L7  &middot;  top 10% movers</span></div>
+        <svg class="spark" width="36" height="14" viewBox="0 0 36 14"><polyline points="0,10 6,9 12,8 18,7 24,5 30,3 36,2" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+      </div>
+
+      <div class="trow">
+        <div class="tl"><span class="tt">MIN</span><span class="tx">OPP eFG% career-best L15 stretch</span></div>
+        <svg class="spark" width="36" height="14" viewBox="0 0 36 14"><polyline points="0,3 6,4 12,5 18,7 24,8 30,9 36,11" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+      </div>
+
+      <div class="trow">
+        <div class="tl"><span class="tt">DEN</span><span class="tx">3PA -3.1/g post-deadline  &middot;  style shift</span></div>
+        <svg class="spark" width="36" height="14" viewBox="0 0 36 14"><polyline points="0,3 6,3 12,4 18,8 24,9 30,10 36,10" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+      </div>
+
+      <div class="trow">
+        <div class="tl"><span class="tt">MIA</span><span class="tx">DEF Rtg -3.2 in L5  &middot;  rotation tightening</span></div>
+        <svg class="spark" width="36" height="14" viewBox="0 0 36 14"><polyline points="0,11 6,10 12,8 18,6 24,5 30,4 36,3" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+      </div>
+
+      <div class="trow">
+        <div class="tl"><span class="tt">GSW</span><span class="tx">bench +6.1 ppg with new rotation</span></div>
+        <svg class="spark" width="36" height="14" viewBox="0 0 36 14"><polyline points="0,9 6,9 12,7 18,5 24,4 30,3 36,2" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+      </div>
+
+      <div class="trow">
+        <div class="tl"><span class="tt">CLE</span><span class="tx">3P% -3.2pp L10  &middot;  signal or noise?</span></div>
+        <svg class="spark" width="36" height="14" viewBox="0 0 36 14"><polyline points="0,3 6,4 12,5 18,6 24,8 30,9 36,11" stroke="currentColor" fill="none" stroke-width="1.5"/></svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="ck-sec">
+    <div class="sec-lbl">This week's biggest movers  &middot;  L10 vs prior L10</div>
+    <table class="tbl">
+      <thead>
+        <tr><th>Team</th><th>Stat</th><th>L10</th><th>Prior L10</th><th style="text-align:right">&Delta;</th><th>Trend</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>PHI</strong></td><td>OFF Rating</td><td>119.2</td><td>114.1</td><td style="text-align:right"><span class="chip chip-up">+5.1</span></td><td><svg class="spark" width="60" height="14" viewBox="0 0 60 14"><polyline points="0,10 8,9 16,8 24,6 32,5 40,3 50,2" stroke="currentColor" fill="none" stroke-width="1.5"/></svg></td></tr>
+        <tr><td><strong>MIN</strong></td><td>DEF Rating</td><td>106.3</td><td>111.1</td><td style="text-align:right"><span class="chip chip-up">&minus;4.8</span></td><td><svg class="spark" width="60" height="14" viewBox="0 0 60 14"><polyline points="0,3 8,4 16,6 24,7 32,9 40,10 50,11" stroke="currentColor" fill="none" stroke-width="1.5"/></svg></td></tr>
+        <tr><td><strong>GSW</strong></td><td>Pace</td><td>102.5</td><td>96.3</td><td style="text-align:right"><span class="chip chip-up">+6.2</span></td><td><svg class="spark" width="60" height="14" viewBox="0 0 60 14"><polyline points="0,11 8,10 16,8 24,7 32,5 40,4 50,2" stroke="currentColor" fill="none" stroke-width="1.5"/></svg></td></tr>
+        <tr><td><strong>CLE</strong></td><td>3P%</td><td>34.1%</td><td>37.3%</td><td style="text-align:right"><span class="chip chip-down">&minus;3.2pp</span></td><td><svg class="spark" width="60" height="14" viewBox="0 0 60 14"><polyline points="0,3 8,4 16,6 24,7 32,9 40,11 50,11" stroke="currentColor" fill="none" stroke-width="1.5"/></svg></td></tr>
+        <tr><td><strong>SAC</strong></td><td>OPP TOV%</td><td>15.8</td><td>12.2</td><td style="text-align:right"><span class="chip chip-up">+3.6</span></td><td><svg class="spark" width="60" height="14" viewBox="0 0 60 14"><polyline points="0,10 8,9 16,7 24,6 32,4 40,3 50,2" stroke="currentColor" fill="none" stroke-width="1.5"/></svg></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+</body>
+</html>

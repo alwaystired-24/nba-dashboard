@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — Editorial</title>
+<style>
+:root {
+  --bg-primary: #0E1525;
+  --bg-secondary: #172033;
+  --text-primary: #E5E9F0;
+  --text-secondary: #8B95A8;
+  --text-tertiary: #5F6B82;
+  --accent: #F4A742;
+  --success: #5FBE85;
+  --danger: #E37070;
+  --border-tertiary: rgba(229,233,240,0.10);
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 32px; background: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text", Helvetica, Arial, sans-serif; font-size: 15px; line-height: 1.6; }
+.frame { max-width: 1100px; margin: 0 auto; }
+.ed-head { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 4px 18px; border-bottom: 0.5px solid var(--border-tertiary); margin-bottom: 24px; }
+.ed-title { font-size: 30px; font-weight: 500; margin: 0; line-height: 1.2; }
+.ed-sub { font-size: 14px; color: var(--text-secondary); }
+.gm { display: grid; grid-template-columns: 160px 1fr 130px; gap: 24px; padding: 22px 4px; border-bottom: 0.5px solid var(--border-tertiary); align-items: start; }
+.gm:last-of-type { border-bottom: none; }
+.gm-side { display: flex; flex-direction: column; gap: 4px; }
+.gm-mt { font-size: 22px; font-weight: 500; line-height: 1.2; }
+.gm-mt .at { color: var(--text-tertiary); font-weight: 400; }
+.gm-tip { font-size: 13px; color: var(--text-tertiary); margin-top: 4px; }
+.gm-rec { font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+.gm-body { display: flex; flex-direction: column; gap: 12px; }
+.gm-row { display: flex; gap: 14px; align-items: baseline; line-height: 1.6; }
+.gm-row .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); min-width: 88px; flex-shrink: 0; font-weight: 500; padding-top: 2px; }
+.gm-row .txt { font-size: 15px; color: var(--text-primary); }
+.gm-row .txt .num { color: var(--success); font-weight: 500; }
+.gm-row .txt .num.bad { color: var(--danger); }
+.gm-stat { text-align: right; }
+.gm-stat-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); margin-bottom: 6px; font-weight: 500; }
+.gm-stat-val { font-size: 30px; font-weight: 500; color: var(--accent); line-height: 1; }
+.gm-stat-cap { font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
+.ed-feed { margin-top: 32px; padding: 20px 24px; background: var(--bg-secondary); border-radius: var(--radius-lg); }
+.ed-feed-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); margin-bottom: 14px; font-weight: 500; }
+.feed-item { padding: 10px 0; border-bottom: 0.5px solid var(--border-tertiary); display: flex; gap: 14px; align-items: baseline; }
+.feed-item:last-child { border: none; padding-bottom: 0; }
+.feed-team { font-weight: 500; font-size: 14px; min-width: 40px; flex-shrink: 0; color: var(--accent); }
+.feed-txt { font-size: 15px; line-height: 1.6; color: var(--text-primary); }
+.feed-txt .num { color: var(--success); font-weight: 500; }
+.feed-txt .num.bad { color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <div class="ed-head">
+    <h1 class="ed-title">Tonight</h1>
+    <div class="ed-sub">Wed 18 Mar  &middot;  8 games  &middot;  3 highlighted</div>
+  </div>
+
+  <div class="gm">
+    <div class="gm-side">
+      <div class="gm-mt">NYK<br><span class="at">at</span> BOS</div>
+      <div class="gm-tip">8:00 PM ET</div>
+      <div class="gm-rec">NYK 42-22  &middot;  BOS 51-13</div>
+    </div>
+    <div class="gm-body">
+      <div class="gm-row">
+        <span class="lbl">Story angle</span>
+        <span class="txt">Boston's defense has tightened to elite tier over the last 10 &mdash; but they're without Brown and Holiday, redistributing 64 minutes. Whether the system holds without the perimeter pressure is the game.</span>
+      </div>
+      <div class="gm-row">
+        <span class="lbl">Key edge</span>
+        <span class="txt">BOS OPP eFG% allowed sits in the top 5 league-wide this stretch (<span class="num">+95th %ile</span>).</span>
+      </div>
+      <div class="gm-row">
+        <span class="lbl">Watch for</span>
+        <span class="txt">NYK pace has crept up <span class="num">+4.2</span> possessions vs prior L10 &mdash; they want this game faster than Boston does.</span>
+      </div>
+    </div>
+    <div class="gm-stat">
+      <div class="gm-stat-lbl">Pace gap</div>
+      <div class="gm-stat-val">+4.2</div>
+      <div class="gm-stat-cap">NYK over L10</div>
+    </div>
+  </div>
+
+  <div class="gm">
+    <div class="gm-side">
+      <div class="gm-mt">DEN<br><span class="at">at</span> OKC</div>
+      <div class="gm-tip">9:30 PM ET</div>
+      <div class="gm-rec">DEN 47-17  &middot;  OKC 49-15</div>
+    </div>
+    <div class="gm-body">
+      <div class="gm-row">
+        <span class="lbl">Story angle</span>
+        <span class="txt">Two top-3 offenses, but Denver's the one on back-to-back on a third road game. OKC's perimeter D has been historically stingy since the deadline &mdash; Denver hasn't faced a 3P defense this strict in months.</span>
+      </div>
+      <div class="gm-row">
+        <span class="lbl">Key edge</span>
+        <span class="txt">OKC OPP 3P% allowed is at a season-low <span class="num">32.7%</span> over L15 &mdash; best since trade deadline.</span>
+      </div>
+      <div class="gm-row">
+        <span class="lbl">Watch for</span>
+        <span class="txt">Denver's 3PA volume has dropped <span class="num bad">&minus;3.1</span>/game post-deadline &mdash; quiet style shift toward interior.</span>
+      </div>
+    </div>
+    <div class="gm-stat">
+      <div class="gm-stat-lbl">OKC OPP 3P%</div>
+      <div class="gm-stat-val">32.7%</div>
+      <div class="gm-stat-cap">L15  &middot;  best in NBA</div>
+    </div>
+  </div>
+
+  <div class="gm">
+    <div class="gm-side">
+      <div class="gm-mt">PHX<br><span class="at">at</span> GSW</div>
+      <div class="gm-tip">10:00 PM ET</div>
+      <div class="gm-rec">PHX 38-26  &middot;  GSW 40-24</div>
+    </div>
+    <div class="gm-body">
+      <div class="gm-row">
+        <span class="lbl">Story angle</span>
+        <span class="txt">Soft defense on both sides over the last 10 &mdash; the kind of matchup where pace creates artificially big numbers. Watch the totals market; this could play 240+.</span>
+      </div>
+      <div class="gm-row">
+        <span class="lbl">Key edge</span>
+        <span class="txt">GSW pace <span class="num">+6.2</span> over L10 &mdash; the fastest team in the league this stretch.</span>
+      </div>
+      <div class="gm-row">
+        <span class="lbl">Watch for</span>
+        <span class="txt">Phoenix's TS% has crept into the 84th %ile &mdash; efficient enough to keep up.</span>
+      </div>
+    </div>
+    <div class="gm-stat">
+      <div class="gm-stat-lbl">GSW pace</div>
+      <div class="gm-stat-val">102.5</div>
+      <div class="gm-stat-cap">+6.2 vs prior L10</div>
+    </div>
+  </div>
+
+  <div class="ed-feed">
+    <div class="ed-feed-lbl">League this week  &middot;  five things to know</div>
+
+    <div class="feed-item">
+      <span class="feed-team">PHI</span>
+      <span class="feed-txt">Sixers' offense has climbed <span class="num">+5.1</span> OFF Rating over the last 7 &mdash; top 10% of league movers this week, mostly from a jump in transition opportunities.</span>
+    </div>
+    <div class="feed-item">
+      <span class="feed-team">MIN</span>
+      <span class="feed-txt">Wolves' OPP eFG% sits at a career-best for any 15-game stretch this season. The trade deadline addition is paying defensive dividends.</span>
+    </div>
+    <div class="feed-item">
+      <span class="feed-team">DEN</span>
+      <span class="feed-txt">Nuggets quietly attempting <span class="num bad">&minus;3.1</span> threes per game post-deadline. Identity shift toward Jokic-led interior more than the box score shows.</span>
+    </div>
+    <div class="feed-item">
+      <span class="feed-team">MIA</span>
+      <span class="feed-txt">Heat's defense has tightened <span class="num">&minus;3.2</span> DEF Rating in L5. Rotation has compressed to 8 &mdash; Spo's playoff mode is here.</span>
+    </div>
+    <div class="feed-item">
+      <span class="feed-team">CLE</span>
+      <span class="feed-txt">Cavs 3P% down <span class="num bad">&minus;3.2pp</span> over L10 &mdash; outside variance or real cooling? Volume is unchanged, so likely noise. Don't overreact.</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>
